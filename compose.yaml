@@ -1,0 +1,15 @@
+services:
+  api:
+    build: .
+    container_name: labmanager-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8001:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://labmanager_user:${POSTGRES_PASSWORD}@postgres-db:5432/labmanager
+    networks:
+      - postgres-db_default
+
+networks:
+  postgres-db_default:
+    external: true
