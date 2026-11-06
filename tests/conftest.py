@@ -7,7 +7,8 @@ from sqlalchemy.pool import StaticPool
 
 from app.main import app
 from app.database import get_db
-from app.models import Base
+from app.auth import get_current_user
+from app.models import Base, User
 
 
 @pytest.fixture
@@ -19,9 +20,7 @@ def test_engine():
     )
 
     Base.metadata.create_all(bind=engine)
-
     yield engine
-
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
 
@@ -41,7 +40,16 @@ def client(test_engine):
         finally:
             db.close()
 
+    def override_get_current_user():
+        return User(
+            id=1,
+            email="test@example.com",
+            hashed_password="test",
+            is_active=True
+        )
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_get_current_user
 
     with TestClient(app) as test_client:
         yield test_client

@@ -1,11 +1,15 @@
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, status
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+
 from app.database import engine, get_db
-from app.models import Laboratory, Equipment
+from app.models import Laboratory, Equipment, User
 from app.schemas.laboratory import LaboratoryCreate, LaboratoryResponse, LaboratoryUpdate
 from app.schemas.equipment import EquipmentCreate, EquipmentResponse, EquipmentUpdate
-
+from app.schemas.auth import UserCreate, UserResponse, TokenResponse
+from app.security import hash_password, verify_password
+from app.auth import create_access_token, get_current_user
 app = FastAPI(
     title="LabManager API",
     description="Laboratuvar ve ekipman yönetim sistemi",
@@ -28,12 +32,81 @@ def health():
     }
 
 
+# AUTHENTICATION ENDPOINTS
+
+@app.post("/register", response_model=UserResponse, status_code=201)
+def register_user(
+    user: UserCreate,
+    db: Session = Depends(get_db)
+):
+    existing_user = db.query(User).filter(
+        User.email == user.email
+    ).first()
+
+    if existing_user:
+        raise HTTPException(
+            status_code=409,
+            detail="Email already registered"
+        )
+
+    new_user = User(
+        email=user.email,
+        hashed_password=hash_password(user.password)
+    )
+
+    db.add(new_user)
+
+    try:
+        db.commit()
+        db.refresh(new_user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Email already registered"
+        )
+
+    return new_user
+
+
+@app.post("/login", response_model=TokenResponse)
+def login_user(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(
+        User.email == form_data.username
+    ).first()
+
+    if not user or not verify_password(
+        form_data.password,
+        user.hashed_password
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Inactive user"
+        )
+
+    access_token = create_access_token(user.email)
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
 # LABORATORY ENDPOINTS
 
 @app.post("/laboratories", response_model=LaboratoryResponse, status_code=201)
 def create_laboratory(
     laboratory: LaboratoryCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     new_laboratory = Laboratory(
         name=laboratory.name,
@@ -48,7 +121,10 @@ def create_laboratory(
 
 
 @app.get("/laboratories", response_model=list[LaboratoryResponse])
-def get_laboratories(db: Session = Depends(get_db)):
+def get_laboratories(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     return db.query(Laboratory).all()
 @app.get(
     "/laboratories/{laboratory_id}/equipment",
@@ -56,7 +132,8 @@ def get_laboratories(db: Session = Depends(get_db)):
 )
 def get_laboratory_equipment(
     laboratory_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     laboratory = db.query(Laboratory).filter(
         Laboratory.id == laboratory_id
@@ -74,7 +151,10 @@ def get_laboratory_equipment(
 
 # EQUIPMENT ENDPOINTS
 @app.get("/equipment/stats", response_model=dict[str, int])
-def get_equipment_stats(db: Session = Depends(get_db)):
+def get_equipment_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
 
     total = db.query(Equipment).count()
 
@@ -99,7 +179,8 @@ def get_equipment_stats(db: Session = Depends(get_db)):
 @app.post("/equipment", response_model=EquipmentResponse, status_code=201)
 def create_equipment(
     equipment: EquipmentCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     laboratory = db.query(Laboratory).filter(
         Laboratory.id == equipment.laboratory_id
@@ -142,7 +223,8 @@ def get_equipment(
     order: str = "asc",
 skip: int = Query(0, ge=0),
 limit: int = Query(10, ge=1, le=100),	
-    db: Session = Depends(get_db)
+        db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     query = db.query(Equipment)
 
@@ -198,7 +280,8 @@ limit: int = Query(10, ge=1, le=100),
 def update_equipment(
     equipment_id: int,
     equipment: EquipmentUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     existing_equipment = db.query(Equipment).filter(
         Equipment.id == equipment_id
@@ -253,7 +336,8 @@ def update_equipment(
 @app.delete("/equipment/{equipment_id}")
 def delete_equipment(
     equipment_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     equipment = db.query(Equipment).filter(
         Equipment.id == equipment_id
@@ -276,7 +360,8 @@ def delete_equipment(
 def update_laboratory(
     laboratory_id: int,
     laboratory: LaboratoryUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     existing_laboratory = db.query(Laboratory).filter(
         Laboratory.id == laboratory_id
@@ -298,7 +383,8 @@ def update_laboratory(
 @app.delete("/laboratories/{laboratory_id}")
 def delete_laboratory(
     laboratory_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     laboratory = db.query(Laboratory).filter(
         Laboratory.id == laboratory_id
