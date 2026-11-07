@@ -19,9 +19,15 @@ class Laboratory(Base):
     __tablename__ = "laboratories"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+
     location: Mapped[str | None] = mapped_column(String(150), nullable=True)
 
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False
+    )
 
 class Equipment(Base):
     __tablename__ = "equipment"

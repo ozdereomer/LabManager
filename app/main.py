@@ -110,7 +110,8 @@ def create_laboratory(
 ):
     new_laboratory = Laboratory(
         name=laboratory.name,
-        location=laboratory.location
+        location=laboratory.location,
+        user_id=current_user.id
     )
 
     db.add(new_laboratory)
@@ -118,14 +119,14 @@ def create_laboratory(
     db.refresh(new_laboratory)
 
     return new_laboratory
-
-
 @app.get("/laboratories", response_model=list[LaboratoryResponse])
 def get_laboratories(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    return db.query(Laboratory).all()
+    return db.query(Laboratory).filter(
+        Laboratory.user_id == current_user.id
+    ).all()
 @app.get(
     "/laboratories/{laboratory_id}/equipment",
     response_model=list[EquipmentResponse]
@@ -136,8 +137,9 @@ def get_laboratory_equipment(
     current_user: User = Depends(get_current_user)
 ):
     laboratory = db.query(Laboratory).filter(
-        Laboratory.id == laboratory_id
-    ).first()
+    Laboratory.id == laboratory_id,
+    Laboratory.user_id == current_user.id
+).first()
 
     if laboratory is None:
         raise HTTPException(
@@ -148,25 +150,32 @@ def get_laboratory_equipment(
     return db.query(Equipment).filter(
         Equipment.laboratory_id == laboratory_id
     ).all()
-
 # EQUIPMENT ENDPOINTS
 @app.get("/equipment/stats", response_model=dict[str, int])
 def get_equipment_stats(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    user_laboratory_ids = db.query(Laboratory.id).filter(
+        Laboratory.user_id == current_user.id
+    ).subquery()
 
-    total = db.query(Equipment).count()
+    total = db.query(Equipment).filter(
+        Equipment.laboratory_id.in_(user_laboratory_ids)
+    ).count()
 
     available = db.query(Equipment).filter(
+        Equipment.laboratory_id.in_(user_laboratory_ids),
         Equipment.status == "available"
     ).count()
 
     maintenance = db.query(Equipment).filter(
+        Equipment.laboratory_id.in_(user_laboratory_ids),
         Equipment.status == "maintenance"
     ).count()
 
     broken = db.query(Equipment).filter(
+        Equipment.laboratory_id.in_(user_laboratory_ids),
         Equipment.status == "broken"
     ).count()
 
@@ -183,9 +192,9 @@ def create_equipment(
     current_user: User = Depends(get_current_user)
 ):
     laboratory = db.query(Laboratory).filter(
-        Laboratory.id == equipment.laboratory_id
-    ).first()
-
+    Laboratory.id == equipment.laboratory_id,
+    Laboratory.user_id == current_user.id
+).first()
     if laboratory is None:
         raise HTTPException(
             status_code=404,
@@ -221,12 +230,17 @@ def get_equipment(
     laboratory_id: int | None = None,
     sort_by: str = "id",
     order: str = "asc",
-skip: int = Query(0, ge=0),
-limit: int = Query(10, ge=1, le=100),	
-        db: Session = Depends(get_db),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    query = db.query(Equipment)
+    query = db.query(Equipment).join(
+        Laboratory,
+        Equipment.laboratory_id == Laboratory.id
+    ).filter(
+        Laboratory.user_id == current_user.id
+    )
 
     if name:
         query = query.filter(
@@ -283,9 +297,13 @@ def update_equipment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    existing_equipment = db.query(Equipment).filter(
-        Equipment.id == equipment_id
-    ).first()
+    existing_equipment = db.query(Equipment).join(
+    Laboratory,
+    Equipment.laboratory_id == Laboratory.id
+).filter(
+    Equipment.id == equipment_id,
+    Laboratory.user_id == current_user.id
+).first()
 
     if existing_equipment is None:
         raise HTTPException(
@@ -294,8 +312,9 @@ def update_equipment(
         )
 
     laboratory = db.query(Laboratory).filter(
-        Laboratory.id == equipment.laboratory_id
-    ).first()
+    Laboratory.id == equipment.laboratory_id,
+    Laboratory.user_id == current_user.id
+).first()
 
     if laboratory is None:
         raise HTTPException(
@@ -303,10 +322,14 @@ def update_equipment(
             detail="Laboratory not found"
         )
 
-    duplicate = db.query(Equipment).filter(
-        Equipment.serial_number == equipment.serial_number,
-        Equipment.id != equipment_id
-    ).first()
+    duplicate = db.query(Equipment).join(
+    Laboratory,
+    Equipment.laboratory_id == Laboratory.id
+).filter(
+    Equipment.serial_number == equipment.serial_number,
+    Equipment.id != equipment_id,
+    Laboratory.user_id == current_user.id
+).first()
 
     if duplicate:
         raise HTTPException(
@@ -339,9 +362,13 @@ def delete_equipment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    equipment = db.query(Equipment).filter(
-        Equipment.id == equipment_id
-    ).first()
+    equipment = db.query(Equipment).join(
+    Laboratory,
+    Equipment.laboratory_id == Laboratory.id
+).filter(
+    Equipment.id == equipment_id,
+    Laboratory.user_id == current_user.id
+).first()
 
     if equipment is None:
         raise HTTPException(
@@ -364,8 +391,9 @@ def update_laboratory(
     current_user: User = Depends(get_current_user)
 ):
     existing_laboratory = db.query(Laboratory).filter(
-        Laboratory.id == laboratory_id
-    ).first()
+    Laboratory.id == laboratory_id,
+    Laboratory.user_id == current_user.id
+).first()
 
     if existing_laboratory is None:
         raise HTTPException(
@@ -387,8 +415,9 @@ def delete_laboratory(
     current_user: User = Depends(get_current_user)
 ):
     laboratory = db.query(Laboratory).filter(
-        Laboratory.id == laboratory_id
-    ).first()
+    Laboratory.id == laboratory_id,
+    Laboratory.user_id == current_user.id
+).first()
 
     if laboratory is None:
         raise HTTPException(
