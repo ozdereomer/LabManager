@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-
+import logging
 from app.database import engine, get_db
 from app.models import Laboratory, Equipment, User
 from app.schemas.laboratory import LaboratoryCreate, LaboratoryResponse, LaboratoryUpdate
@@ -10,12 +10,42 @@ from app.schemas.equipment import EquipmentCreate, EquipmentResponse, EquipmentU
 from app.schemas.auth import UserCreate, UserResponse, TokenResponse
 from app.security import hash_password, verify_password
 from app.auth import create_access_token, get_current_user
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+)
+
+logger = logging.getLogger("labmanager")
+
 app = FastAPI(
     title="LabManager API",
     description="Laboratuvar ve ekipman yönetim sistemi",
     version="0.1.0"
 )
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logger.exception(
+        "Unhandled exception: %s %s",
+        request.method,
+        request.url.path
+    )
+
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"}
+    )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["\*"],
+    allow_headers=["\*"],
+)
 
 @app.get("/")
 def home():

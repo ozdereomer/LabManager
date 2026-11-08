@@ -1,3 +1,4 @@
+
 def create_laboratory(client):
     response = client.post(
         "/laboratories",
@@ -715,3 +716,35 @@ def test_users_cannot_access_each_others_equipment(multi_user_client):
 
     response = client.get("/equipment")
     assert len(response.json()) == 1
+def test_global_exception_handler(client):
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    def test_error():
+        raise RuntimeError("Test internal error")
+
+    app.add_api_route(
+        "/test-error",
+        test_error,
+        methods=["GET"]
+    )
+
+    route = next(
+        route for route in app.router.routes
+        if getattr(route, "path", None) == "/test-error"
+    )
+
+    try:
+        with TestClient(
+            app,
+            raise_server_exceptions=False
+        ) as test_client:
+            response = test_client.get("/test-error")
+
+        assert response.status_code == 500
+        assert response.json() == {
+            "detail": "Internal server error"
+        }
+
+    finally:
+        app.router.routes.remove(route)
