@@ -598,3 +598,120 @@ def test_equipment_stats_empty(client):
         "maintenance": 0,
         "broken": 0
     }
+def test_users_cannot_access_each_others_laboratories(multi_user_client):
+    client, current_user = multi_user_client
+
+    # User 1 creates a laboratory
+    response = client.post(
+        "/laboratories",
+        json={
+            "name": "User 1 Laboratory",
+            "location": "Floor 1"
+        }
+    )
+
+    assert response.status_code == 201
+    laboratory_id = response.json()["id"]
+
+    # Switch to User 2
+    current_user["id"] = 2
+
+    # User 2 cannot see User 1's laboratory
+    response = client.get("/laboratories")
+    assert response.status_code == 200
+    assert response.json() == []
+
+    # User 2 cannot access its equipment
+    response = client.get(
+        f"/laboratories/{laboratory_id}/equipment"
+    )
+    assert response.status_code == 404
+
+    # User 2 cannot update or delete it
+    response = client.put(
+        f"/laboratories/{laboratory_id}",
+        json={
+            "name": "Hacked Laboratory",
+            "location": "Floor 2"
+        }
+    )
+    assert response.status_code == 404
+
+    response = client.delete(f"/laboratories/{laboratory_id}")
+    assert response.status_code == 404
+
+    # User 1 still owns the laboratory
+    current_user["id"] = 1
+
+    response = client.get("/laboratories")
+    assert len(response.json()) == 1
+
+
+def test_users_cannot_access_each_others_equipment(multi_user_client):
+    client, current_user = multi_user_client
+
+    # User 1 creates a laboratory
+    laboratory = client.post(
+        "/laboratories",
+        json={
+            "name": "User 1 Laboratory",
+            "location": "Floor 1"
+        }
+    )
+
+    laboratory_id = laboratory.json()["id"]
+
+    # User 1 creates equipment
+    equipment = client.post(
+        "/equipment",
+        json={
+            "name": "User 1 Computer",
+            "serial_number": "USER1-001",
+            "status": "available",
+            "laboratory_id": laboratory_id
+        }
+    )
+
+    assert equipment.status_code == 201
+    equipment_id = equipment.json()["id"]
+
+    # Switch to User 2
+    current_user["id"] = 2
+
+    # User 2 cannot see User 1's equipment
+    response = client.get("/equipment")
+    assert response.status_code == 200
+    assert response.json() == []
+
+    # User 2 cannot create equipment in User 1's laboratory
+    response = client.post(
+        "/equipment",
+        json={
+            "name": "Unauthorized Computer",
+            "serial_number": "USER2-001",
+            "status": "available",
+            "laboratory_id": laboratory_id
+        }
+    )
+    assert response.status_code == 404
+
+    # User 2 cannot update or delete User 1's equipment
+    response = client.put(
+        f"/equipment/{equipment_id}",
+        json={
+            "name": "Hacked Computer",
+            "serial_number": "USER1-001",
+            "status": "broken",
+            "laboratory_id": laboratory_id
+        }
+    )
+    assert response.status_code == 404
+
+    response = client.delete(f"/equipment/{equipment_id}")
+    assert response.status_code == 404
+
+    # User 1 still owns the equipment
+    current_user["id"] = 1
+
+    response = client.get("/equipment")
+    assert len(response.json()) == 1
