@@ -1,5 +1,37 @@
+# Secrets and environment files
 .env
-__pycache__
-*.pyc
-.venv
+.env.*
+!.env.example
+
+# Git
 .git
+.github
+
+# Python cache and virtual environments
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+.venv
+venv
+
+# Test coverage artifacts
+.coverage
+.coverage.*
+htmlcov
+coverage.xml
+
+# Frontend
+frontend
+
+# IDE and operating system files
+.vscode
+.idea
+**/.DS_Store
+
+# Logs and temporary files
+**/*.log
+nodesource_setup.sh
+
+# Documentation
+README.md

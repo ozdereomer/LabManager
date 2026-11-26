@@ -1,6 +1,8 @@
 services:
   api:
-    build: .
+    build:
+      context: .
+      target: production
     container_name: labmanager-api
     restart: unless-stopped
     ports:
@@ -10,6 +12,17 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
     networks:
       - postgres-db_default
+
+  api-test:
+    build:
+      context: .
+      target: test
+    profiles:
+      - test
+    environment:
+      DATABASE_URL: "sqlite://"
+      JWT_SECRET_KEY: "local-test-key-not-for-production-0123456789abcdef"
+    network_mode: none
 
 networks:
   postgres-db_default:

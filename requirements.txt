@@ -3,10 +3,7 @@ uvicorn[standard]
 sqlalchemy
 psycopg[binary]
 alembic
-pytest
-httpx2==2.16.2
 pwdlib[argon2]
 PyJWT
 email-validator
 python-multipart
-pytest-cov
