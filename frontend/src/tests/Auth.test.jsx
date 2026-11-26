@@ -329,3 +329,150 @@ describe('Auth component', () => {
     expect(localStorage.getItem('access_token')).toBeNull()
   })
 })
+
+describe('Auth rate limiting and service availability', () => {
+  const scenarios = [
+    [
+      429,
+      { 'retry-after': '60' },
+      'Çok fazla işlem yaptınız. Lütfen 60 saniye sonra tekrar deneyin.',
+    ],
+    [
+      429,
+      {},
+      'Çok fazla istek gönderdiniz. Lütfen bir süre sonra tekrar deneyin.',
+    ],
+    [
+      503,
+      {},
+      'Hizmet geçici olarak kullanılamıyor. Lütfen daha sonra tekrar deneyin.',
+    ],
+  ]
+
+  beforeEach(() => {
+    api.post.mockReset()
+  })
+
+  it.each(scenarios)(
+    'handles login error %s with headers %j',
+    async (status, headers, message) => {
+      api.post.mockRejectedValueOnce({
+        response: { status, headers },
+      })
+
+      const { user, onLogin } = renderAuth()
+
+      await fillForm(user)
+
+      await user.click(
+        screen.getByRole('button', { name: 'Giriş Yap' })
+      )
+
+      expect(
+        await screen.findByText(message)
+      ).toBeInTheDocument()
+
+      expect(api.post).toHaveBeenCalledTimes(1)
+      expect(api.post.mock.calls[0][0]).toBe('/login')
+      expect(onLogin).not.toHaveBeenCalled()
+      expect(localStorage.getItem('access_token')).toBeNull()
+
+      expect(
+        screen.queryByRole('heading', { name: 'Dashboard' })
+      ).not.toBeInTheDocument()
+
+      expect(
+        screen.getByRole('button', { name: 'Giriş Yap' })
+      ).toBeEnabled()
+    }
+  )
+
+  it.each(scenarios)(
+    'handles registration error %s with headers %j',
+    async (status, headers, message) => {
+      api.post.mockRejectedValueOnce({
+        response: { status, headers },
+      })
+
+      const { user, onLogin } = renderAuth()
+
+      await user.click(
+        screen.getByRole('button', { name: 'Kayıt Ol' })
+      )
+
+      await fillForm(user)
+
+      await user.click(
+        screen.getByRole('button', { name: 'Kayıt Ol' })
+      )
+
+      expect(
+        await screen.findByText(message)
+      ).toBeInTheDocument()
+
+      expect(api.post).toHaveBeenCalledTimes(1)
+      expect(api.post.mock.calls[0][0]).toBe('/register')
+      expect(onLogin).not.toHaveBeenCalled()
+      expect(localStorage.getItem('access_token')).toBeNull()
+
+      expect(
+        screen.queryByRole('heading', { name: 'Dashboard' })
+      ).not.toBeInTheDocument()
+
+      expect(
+        screen.getByRole('button', { name: 'Kayıt Ol' })
+      ).toBeEnabled()
+    }
+  )
+
+  it.each(scenarios)(
+    'handles automatic login error %s after registration',
+    async (status, headers, message) => {
+      api.post
+        .mockResolvedValueOnce({
+          data: {
+            id: 1,
+            email: 'test@example.com',
+            is_active: true,
+          },
+        })
+        .mockRejectedValueOnce({
+          response: { status, headers },
+        })
+
+      const { user, onLogin } = renderAuth()
+
+      await user.click(
+        screen.getByRole('button', { name: 'Kayıt Ol' })
+      )
+
+      await fillForm(user)
+
+      await user.click(
+        screen.getByRole('button', { name: 'Kayıt Ol' })
+      )
+
+      expect(
+        await screen.findByText(message)
+      ).toBeInTheDocument()
+
+      expect(api.post).toHaveBeenCalledTimes(2)
+      expect(api.post.mock.calls[0][0]).toBe('/register')
+      expect(api.post.mock.calls[1][0]).toBe('/login')
+      expect(onLogin).not.toHaveBeenCalled()
+      expect(localStorage.getItem('access_token')).toBeNull()
+
+      expect(
+        screen.queryByRole('heading', { name: 'Dashboard' })
+      ).not.toBeInTheDocument()
+
+      expect(
+        screen.getByRole('heading', { name: 'Hoş Geldiniz' })
+      ).toBeInTheDocument()
+
+      expect(
+        screen.getByRole('button', { name: 'Giriş Yap' })
+      ).toBeEnabled()
+    }
+  )
+})

@@ -10,8 +10,44 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://labmanager_user:${POSTGRES_PASSWORD}@postgres-db:5432/labmanager
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Redis password is required}
     networks:
       - postgres-db_default
+      - internal
+
+  redis:
+    image: redis:8-alpine@sha256:5af80107c1eeecb484a2269b80a26d12bfa6521787da4663bd9f19f60a163483
+    container_name: labmanager-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - noeviction
+      - --protected-mode
+      - "yes"
+      - --aclfile
+      - /etc/redis/users.acl
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?Redis password is required}
+    mem_limit: 128m
+    volumes:
+      - redis-data:/data
+      - ./deploy/redis/users.acl:/etc/redis/users.acl:ro
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --user labmanager ping | grep -qx PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   api-test:
     build:
@@ -27,3 +63,8 @@ services:
 networks:
   postgres-db_default:
     external: true
+  internal:
+    internal: true
+
+volumes:
+  redis-data:

@@ -134,3 +134,42 @@ def auth_client(test_engine):
             yield test_client
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def mock_endpoint_rate_limiter(monkeypatch):
+    from unittest.mock import Mock
+
+    limiter = Mock()
+
+    monkeypatch.setattr(
+        "app.main.enforce_rate_limit",
+        limiter
+    )
+
+    return limiter
+
+
+@pytest.fixture(autouse=True)
+def isolate_redis_rate_limit_keys(monkeypatch):
+    import os
+    from uuid import uuid4
+
+    if os.getenv("RUN_REDIS_INTEGRATION") == "1":
+        expected_environment = {
+            "REDIS_HOST": "labmanager-redis-test",
+            "REDIS_PASSWORD": "isolated-test-password",
+            "DATABASE_URL": "sqlite://",
+        }
+
+        for name, expected in expected_environment.items():
+            if os.getenv(name) != expected:
+                pytest.fail(
+                    f"Unsafe Redis integration environment: {name}",
+                    pytrace=False
+                )
+
+        monkeypatch.setattr(
+            "app.rate_limiter.SECRET_KEY",
+            uuid4().hex
+        )

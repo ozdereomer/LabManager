@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import api from '../services/api'
+import { getApiErrorMessage } from '../utils/apiError'
 
 function Dashboard() {
   const [dashboard, setDashboard] = useState(null)
@@ -17,9 +18,15 @@ function Dashboard() {
         if (active) {
           setDashboard(response.data)
         }
-      } catch {
+      } catch (err) {
         if (active) {
-          setError('Dashboard verileri yüklenemedi.')
+          const status = err.response?.status
+
+          setError(
+            status === 429 || status === 503
+              ? getApiErrorMessage(err)
+              : 'Dashboard verileri yüklenemedi.'
+          )
         }
       } finally {
         if (active) {

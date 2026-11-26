@@ -42,6 +42,9 @@ jobs:
       - name: Run backend tests with coverage
         run: python -m pytest -q
 
+      - name: Run Redis integration tests
+        run: bash deploy/scripts/test-redis-integration.sh
+
   frontend:
     name: Frontend Tests and Build
     runs-on: ubuntu-latest

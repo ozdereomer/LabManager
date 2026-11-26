@@ -8,7 +8,8 @@
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-336791)
 ![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED)
 ![Nginx](https://img.shields.io/badge/Nginx-Reverse_Proxy-009639)
-![Tests](https://img.shields.io/badge/Tests-297_passing-brightgreen)
+![Redis](https://img.shields.io/badge/Redis-8-DC382D)
+![Tests](https://img.shields.io/badge/Tests-385_passing-brightgreen)
 
 ## Overview
 
@@ -17,8 +18,9 @@ application designed to simplify laboratory operations, equipment
 inventory management, maintenance tracking, and reporting.
 
 The application combines a FastAPI REST API, a React frontend,
-PostgreSQL persistence, JWT authentication, automated testing,
-containerized backend deployment, and an Nginx reverse proxy.
+PostgreSQL persistence, JWT authentication, Redis-backed rate
+limiting, automated testing, containerized backend deployment,
+and an Nginx reverse proxy with traffic protection.
 
 ## Features
 
@@ -33,6 +35,12 @@ containerized backend deployment, and an Nginx reverse proxy.
 - Token invalidation after credential changes
 - Centralized frontend session expiration handling
 - Protected frontend routes
+- Redis-backed authentication rate limiting
+- Per-account and global request limits
+- Atomic rate limit enforcement using Lua
+- HTTP 429 responses with Retry-After headers from the API
+- HTTP 503 responses when the rate limiting service is unavailable
+- User-friendly frontend handling of rate limits and service outages
 
 ### Laboratory Management
 
@@ -80,6 +88,8 @@ containerized backend deployment, and an Nginx reverse proxy.
 | Backend | Python 3.12, FastAPI, Uvicorn |
 | Frontend | React, Vite, React Router, Axios |
 | Database | PostgreSQL 17 |
+| Rate Limiting | Redis 8, Lua, redis-py |
+| Redis Security | ACL, SHA-256 password hashes, HMAC-SHA256 keys |
 | ORM | SQLAlchemy |
 | Validation | Pydantic |
 | Migrations | Alembic |
@@ -90,7 +100,7 @@ containerized backend deployment, and an Nginx reverse proxy.
 | Containerization | Docker, Docker Compose |
 | Web Server | Nginx |
 | CI | GitHub Actions |
-| Deployment | Bash, rsync, flock |
+| Deployment | Bash, Python, rsync, flock |
 | Operating System | Ubuntu Server |
 
 ## System Architecture
@@ -100,9 +110,13 @@ flowchart TD
     A[Client Browser] --> B[SSH Tunnel]
     B --> C[Nginx Reverse Proxy]
     C -->|Static files| D[React Production Build]
-    C -->|API requests| E[FastAPI Docker Container]
+    C -->|Rate-limited API requests| E[FastAPI Docker Container]
     E --> F[SQLAlchemy ORM]
     F --> G[(PostgreSQL 17)]
+    E -->|Authentication rate limiting| H[(Redis 8)]
+    subgraph Internal Docker Network
+        H
+    end
 ```
 
 Nginx serves the compiled React application and forwards requests
@@ -114,6 +128,20 @@ The current server deployment binds Nginx and the backend API
 to localhost. Remote access is provided through an SSH tunnel.
 
 The Vite development server is not required in production.
+
+The application uses two complementary traffic protection layers:
+
+1. Nginx applies shared request limits before forwarding API traffic.
+2. FastAPI uses Redis to enforce authentication and account-specific
+   limits.
+
+Redis is connected to the API through an internal Docker network.
+It has no published host port and requires ACL authentication.
+
+PostgreSQL remains on a separately managed external Docker network.
+
+Redis stores temporary rate limit counters rather than laboratory
+records, equipment data, passwords, or JWT access tokens.
 
 ## Database Relationships
 
@@ -169,6 +197,8 @@ LabManager/
 │   ├── main.py
 │   ├── auth.py
 │   ├── security.py
+│   ├── rate_limiter.py
+│   ├── redis_client.py
 │   ├── database.py
 │   ├── models.py
 │   └── schemas/
@@ -184,12 +214,18 @@ LabManager/
 │   └── vite.config.js
 ├── deploy/
 │   ├── nginx/
-│   │   └── labmanager.conf
+│   │   ├── labmanager.conf
+│   │   └── labmanager-rate-limit.conf
+│   ├── redis/
+│   │   └── users.acl (generated, ignored by Git)
 │   └── scripts/
-│       └── deploy-frontend.sh
+│       ├── deploy-frontend.sh
+│       ├── setup-redis-acl.py
+│       └── test-redis-integration.sh
 ├── migrations/
 │   └── versions/
 ├── tests/
+├── .env.example
 ├── .dockerignore
 ├── .gitignore
 ├── Dockerfile
@@ -293,6 +329,8 @@ GET /equipment?status=available&sort_by=name&order=asc&skip=0&limit=10
 - Node.js 24
 - npm
 - PostgreSQL 17
+- Python 3 for Redis ACL setup
+- OpenSSL for secure secret generation
 - Nginx for production frontend hosting
 - rsync and flock for frontend deployment
 
@@ -305,28 +343,77 @@ cd LabManager
 
 ### Environment Variables
 
-Create a `.env` file in the project root:
+For a fresh installation, create the environment file:
 
-```env
-POSTGRES_PASSWORD=replace_with_database_password
-JWT_SECRET_KEY=replace_with_secure_random_secret
+```bash
+cp -n .env.example .env
+chmod 600 .env
 ```
 
-Generate a secure JWT signing secret locally:
+Generate two independent random secrets locally:
 
 ```bash
 openssl rand -hex 32
+openssl rand -hex 32
 ```
 
-Use the generated value in the `.env` file.
+Edit the environment file:
 
-Never commit real credentials, signing keys, or access tokens
-to the repository.
+```bash
+nano .env
+```
 
-The database password must match the password configured for
-the PostgreSQL application user. With the current Compose URL
-format, use a URL-safe password or correctly encode reserved
-characters.
+| Variable | Purpose |
+|---|---|
+| POSTGRES_PASSWORD | Existing PostgreSQL application password |
+| JWT_SECRET_KEY | Independent JWT signing secret |
+| REDIS_PASSWORD | Independent 64-character lowercase hexadecimal password |
+
+The PostgreSQL username and database name are fixed in compose.yaml.
+POSTGRES_USER and POSTGRES_DB document the expected configuration.
+
+Use a URL-safe database password or correctly encode reserved
+characters in the database connection URL.
+
+Never commit real credentials, signing keys, ACL files, or access tokens.
+
+### Redis ACL Configuration
+
+Generate the private Redis ACL file:
+
+```bash
+python3 deploy/scripts/setup-redis-acl.py
+```
+
+The setup script:
+
+- Requires environment file permissions of 600.
+- Validates the Redis password format.
+- Stores a SHA-256 password hash in the ACL file.
+- Creates the ACL file with permissions of 640.
+- Preserves an existing valid ACL configuration.
+- Rejects mismatched configurations without overwriting them.
+
+The verified Redis image runs with UID 999 and GID 1000.
+The container must be able to read the generated ACL file.
+
+Check file permissions and ownership:
+
+```bash
+stat -c '%a %u %g' deploy/redis/users.acl
+```
+
+If necessary, assign the Redis-compatible group:
+
+```bash
+sudo chgrp 1000 deploy/redis/users.acl
+```
+
+Do not make the private ACL file world-readable.
+
+Credential rotation requires coordinated changes to the
+environment, ACL configuration, and running containers.
+The setup script does not automatically rotate credentials.
 
 ### PostgreSQL Configuration
 
@@ -350,7 +437,7 @@ repository's Compose services.
 ### Start the Backend
 
 ```bash
-sudo docker compose up -d --build api
+sudo docker compose up -d --build redis api
 ```
 
 Check container status:
@@ -378,7 +465,16 @@ Expected response:
 ```
 
 The health endpoint confirms application responsiveness.
-It is not a comprehensive database readiness check.
+It is not a comprehensive PostgreSQL or Redis readiness check.
+
+Verify authenticated Redis connectivity separately:
+
+```bash
+sudo docker compose exec redis redis-cli --user labmanager ping
+```
+
+The expected response is PONG. The Redis container health check
+also verifies authenticated connectivity.
 
 ### Frontend Development
 
@@ -414,9 +510,10 @@ direct backend tunnel rather than the Nginx API prefix.
 
 | Test suite | Passing tests | Measured coverage |
 |---|---:|---:|
-| Backend | 122 | 100% |
-| Frontend | 175 | 100% |
-| Total | 297 | |
+| Backend | 157 | 100% |
+| Redis integration | 16 | Not measured separately |
+| Frontend | 212 | 100% |
+| Total | 385 | |
 
 These results describe the latest verified local test runs.
 
@@ -446,6 +543,42 @@ Production database records are not used by this test suite.
 
 The backend coverage threshold is configured at 100%.
 
+The standard backend suite mocks the rate limiting service
+and skips the 16 opt-in Redis integration tests.
+
+### Redis Integration Tests
+
+Run the dedicated integration test script:
+
+```bash
+sudo bash deploy/scripts/test-redis-integration.sh
+```
+
+The script creates a temporary test image, internal Docker
+network, Redis container, and test-only ACL configuration.
+
+Integration tests use an in-memory SQLite database and
+dedicated test credentials instead of production services.
+
+The suite verifies:
+
+- Atomic rate limit enforcement under concurrent requests.
+- Counter expiration and remaining retry time.
+- Isolation between identifiers and rate limit scopes.
+- Recovery of counters with missing expiration.
+- Login and registration limits.
+- Account credential update limits.
+- Global authentication request limits.
+- Fail-closed behavior during Redis connection failures.
+
+Temporary resources are removed on normal completion and
+handled failures. Forced termination or host failure may
+require manual cleanup.
+
+Integration tests run separately without coverage measurement.
+PostgreSQL integration and concurrency testing remain planned
+improvements.
+
 ### Frontend Tests
 
 ```bash
@@ -474,6 +607,9 @@ four configured coverage metrics.
 - API interceptors and session handling
 - Protected routes
 - Dashboard behavior
+- Redis rate limiting and concurrent requests
+- Authentication service failure handling
+- Frontend HTTP 429 and HTTP 503 error handling
 
 ## Continuous Integration
 
@@ -486,6 +622,9 @@ pushes to the main branch.
 - Check dependency consistency
 - Execute backend tests
 - Enforce coverage requirements
+- Build an isolated Redis integration test environment
+- Execute Redis integration tests
+- Clean up temporary integration test resources
 
 ### Frontend Pipeline
 
@@ -513,6 +652,15 @@ Production characteristics:
 - Localhost-only published API port
 - Automatic container restart policy
 - External PostgreSQL network integration
+- Internal Docker network for Redis communication
+- Redis image pinned by SHA-256 digest
+- No published Redis host port
+- Restricted Redis ACL permissions
+- Redis AOF persistence with every-second synchronization
+- Redis memory limit of 64 MB with noeviction policy
+- Redis container memory limit of 128 MB
+- Authenticated Redis container health checks
+- Private environment and ACL files excluded from build context
 
 The test image includes development dependencies and
 uses an isolated test environment.
@@ -553,6 +701,8 @@ sudo rsync -a \
 ### Install Nginx Configuration
 
 ```bash
+sudo install -m 644 deploy/nginx/labmanager-rate-limit.conf /etc/nginx/conf.d/labmanager-rate-limit.conf
+
 sudo install -m 644 \
     deploy/nginx/labmanager.conf \
     /etc/nginx/sites-available/labmanager
@@ -678,6 +828,14 @@ planned improvements.
 - Generic internal server error responses
 - Non-root backend container
 - Environment-based secret configuration
+- Redis-backed authentication rate limiting
+- Atomic Lua-based counter updates
+- HMAC-SHA256 rate limit identifiers
+- Fail-closed authentication protection
+- Restricted Redis ACL commands and key namespaces
+- Disabled default Redis user
+- Private Redis network and authenticated health checks
+- Secure environment and ACL file permissions
 
 ### Nginx Security
 
@@ -689,13 +847,158 @@ planned improvements.
 - Referrer-Policy
 - Permissions-Policy
 - Dedicated access and error logs
+- Shared API traffic limits
+- Dedicated login and registration limits
+- Shared credential update limits
+- JSON responses for Nginx-generated HTTP 429 errors
 
-The current security configuration is intended for private
-access through SSH.
+### Authentication Rate Limiting
 
-HTTPS, rate limiting, email verification, password recovery,
-and server-side revocation on manual logout are not yet
-implemented.
+FastAPI enforces the following Redis-backed limits:
+
+| Operation | Scope | Requests | Window |
+|---|---|---:|---:|
+| Login | Normalized email | 5 | 60 seconds |
+| Login | Global | 100 | 60 seconds |
+| Registration | Normalized email | 3 | 60 seconds |
+| Registration | Global | 30 | 60 seconds |
+| Email update | User ID | 5 | 60 seconds |
+| Password update | User ID | 5 | 60 seconds |
+
+Global authentication limits are checked before identifier-specific
+limits.
+
+The limits count requests reaching the limiter, including successful
+and unsuccessful authentication attempts.
+
+Requests rejected before reaching the limiter are not counted.
+
+Redis uses fixed-duration windows starting with the first accepted
+request. Lua scripts update counters and expiration atomically.
+
+Blocked requests do not increment the corresponding blocked counter
+or extend its existing expiration window.
+
+Rate limit keys use HMAC-SHA256 identifiers derived from the JWT
+signing secret instead of storing raw email addresses.
+
+Rotating the JWT signing secret also changes rate limit identifiers.
+
+### Nginx Traffic Protection
+
+| Scope | Sustained rate | Burst |
+|---|---:|---:|
+| Login | 120 requests/minute | 20 |
+| Registration | 60 requests/minute | 10 |
+| Credential updates | 60 requests/minute | 10 |
+| General API | 20 requests/second | 40 |
+
+Nginx uses shared leaky-bucket limits with immediate burst handling.
+
+The credential update zone is shared between email and password
+update endpoints.
+
+The general API limit also applies to authentication and health
+requests.
+
+Limits are shared by clients of the configured server rather than
+based on client IP addresses because the current deployment uses
+SSH tunnels.
+
+Endpoint-specific Nginx limits use URI mappings. Alternative paths
+may not match these mappings but remain subject to the general
+API limit and applicable backend rate limits.
+
+### Rate Limit Error Handling
+
+| Condition | HTTP status | Retry-After |
+|---|---:|---|
+| Backend rate limit exceeded | 429 | Remaining seconds |
+| Nginx rate limit exceeded | 429 | Not provided |
+| Redis unavailable during a protected operation | 503 | Not provided |
+
+The frontend displays user-friendly messages for these conditions
+without treating them as session expiration.
+
+Authentication and credential update operations fail closed when
+Redis is unavailable.
+
+Other API operations do not require Redis for normal execution.
+
+### Redis Security and Persistence
+
+- Redis is accessible through an internal Docker network.
+- No Redis port is published to the host.
+- The default Redis user is disabled.
+- The application uses a dedicated restricted ACL user.
+- Key access is restricted to the rate limiting namespace.
+- Administrative commands are not permitted.
+- The ACL file is mounted read-only.
+- AOF persistence preserves counters across normal restarts.
+- Redis uses a noeviction memory policy.
+
+Redis credentials remain accessible to privileged Docker
+administrators. Docker access must therefore be restricted
+to trusted users.
+
+### Security Limitations
+
+The current deployment is intended for private access through SSH.
+
+Shared and per-account limits can temporarily affect legitimate
+users when another client consumes the available request quota.
+
+Rate limiting reduces abuse but does not eliminate distributed
+denial-of-service attacks or account lockout risks.
+
+The configured limits are intended for the current small-scale
+deployment and should be reviewed before public exposure.
+
+HTTPS, email verification, password recovery, and server-side
+revocation on manual logout are not yet implemented.
+
+### Rate Limiting Deployment Rollback
+
+Before updating an existing deployment, preserve the current API
+image and back up both Nginx configuration files where present.
+
+If the new Nginx configuration causes problems:
+
+1. Restore the previous site configuration.
+2. Restore the previous rate limit configuration, or remove the
+   newly installed rate limit file if none existed before.
+3. Validate the restored configuration.
+4. Reload Nginx only after validation succeeds.
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+To restore a previously preserved API image:
+
+```bash
+sudo docker image tag labmanager-api:before-rate-limiting labmanager-api:latest
+sudo docker compose up -d --no-deps --no-build --force-recreate api
+```
+
+The rollback image tag must exist and refer to the intended
+previous application version.
+
+Verify API and reverse proxy responsiveness after rollback:
+
+```bash
+curl -fsS http://127.0.0.1:8001/health
+curl -fsS http://127.0.0.1/api/health
+```
+
+The API image rollback does not restore database schemas,
+environment variables, or Docker Compose configuration.
+
+Do not remove Redis volumes or modify database records as part
+of an application image rollback.
+
+The rate limiting deployment and smoke tests have been verified
+locally. A complete production rollback has not been executed.
 
 ## Roadmap
 
@@ -716,7 +1019,12 @@ implemented.
 - [x] Frontend deployment automation
 - [x] Isolated rollback verification
 - [ ] HTTPS and TLS configuration
-- [ ] Authentication rate limiting
+- [x] Authentication rate limiting
+- [x] Atomic Redis rate limit enforcement
+- [x] Redis ACL setup automation
+- [x] Isolated Redis integration testing
+- [x] Nginx traffic protection
+- [x] Frontend rate limit and outage handling
 - [ ] PostgreSQL integration and concurrency tests
 - [ ] Automated database backups and restore verification
 - [ ] Application metrics and monitoring
@@ -724,6 +1032,10 @@ implemented.
 - [ ] Deployment retention policies
 - [ ] Continuous delivery pipeline
 - [ ] Role-based access control
+- [ ] Email verification and password recovery
+- [ ] Server-side manual logout revocation
+- [ ] Automated secret rotation
+- [ ] Public deployment security review
 
 ## License
 

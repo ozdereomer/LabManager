@@ -370,3 +370,46 @@ describe('Dashboard component', () => {
     )
   })
 })
+
+describe('Dashboard rate limiting and service availability', () => {
+  beforeEach(() => {
+    api.get.mockReset()
+  })
+
+  it.each([
+    [
+      429,
+      { 'retry-after': '30' },
+      'Çok fazla işlem yaptınız. Lütfen 30 saniye sonra tekrar deneyin.',
+    ],
+    [
+      429,
+      {},
+      'Çok fazla istek gönderdiniz. Lütfen bir süre sonra tekrar deneyin.',
+    ],
+    [
+      503,
+      {},
+      'Hizmet geçici olarak kullanılamıyor. Lütfen daha sonra tekrar deneyin.',
+    ],
+  ])(
+    'handles dashboard error %s with headers %j',
+    async (status, headers, message) => {
+      api.get.mockRejectedValueOnce({
+        response: { status, headers },
+      })
+
+      renderDashboard()
+
+      expect(
+        await screen.findByText(message)
+      ).toBeInTheDocument()
+
+      expect(
+        screen.queryByText('Dashboard yükleniyor...')
+      ).not.toBeInTheDocument()
+
+      expect(api.get).toHaveBeenCalledTimes(1)
+    }
+  )
+})
