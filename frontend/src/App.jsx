@@ -25,7 +25,12 @@ function App() {
     setIsAuthenticated(true)
   }
 
-  return (
+function handleLogout() {
+  localStorage.removeItem('access_token')
+  setIsAuthenticated(false)
+}
+
+return (
     <BrowserRouter>
       <Routes>
         <Route
@@ -50,8 +55,10 @@ function App() {
                     <Route path="/laboratories" element={<Laboratories />} />
                     <Route path="/equipment" element={<Equipment />} />
                     <Route path="/maintenance" element={<Maintenance />} />
-                    <Route path="/settings" element={<Settings />} />
-                    <Route path="*" element={<Navigate to="/" replace />} />
+<Route
+  path="/settings"
+  element={<Settings onLogout={handleLogout} />}
+/>                    <Route path="*" element={<Navigate to="/" replace />} />
                   </Routes>
                 </main>
               </div>

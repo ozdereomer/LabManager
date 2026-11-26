@@ -1,3 +1,9 @@
+from app.schemas.user import (
+    UserProfileResponse,
+    UserEmailUpdate,
+    UserPasswordUpdate,
+    UserSettingsResponse
+)
 from decimal import Decimal
 from sqlalchemy import func, case
 
@@ -27,7 +33,7 @@ from app.security import hash_password, verify_password
 from app.auth import create_access_token, get_current_user
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
+from fastapi.exceptions import RequestValidationError
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -53,13 +59,32 @@ async def global_exception_handler(request, exc):
         status_code=500,
         content={"detail": "Internal server error"}
     )
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    safe_errors = []
 
+    for error in exc.errors():
+        safe_errors.append({
+            "type": error["type"],
+            "loc": error["loc"],
+            "msg": "Invalid input"
+        })
+
+    return JSONResponse(
+        status_code=422,
+        content={"detail": safe_errors}
+    )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3002",
+        "http://127.0.0.1:3002",
+    ],
     allow_credentials=True,
-    allow_methods=["\*"],
-    allow_headers=["\*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.get("/")
@@ -139,11 +164,131 @@ def login_user(
             detail="Inactive user"
         )
 
-    access_token = create_access_token(user.email)
+    access_token = create_access_token(user)
 
     return {
         "access_token": access_token,
         "token_type": "bearer"
+    }
+
+# USER SETTINGS ENDPOINTS
+
+@app.get("/users/me", response_model=UserProfileResponse)
+def get_user_profile(
+    current_user: User = Depends(get_current_user)
+):
+    return current_user
+@app.put("/users/me/email", response_model=UserSettingsResponse)
+def update_user_email(
+    data: UserEmailUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    token_version = current_user.token_version
+
+    user = db.query(User).filter(
+        User.id == current_user.id
+    ).with_for_update().populate_existing().first()
+
+    if (
+        user is None
+        or not user.is_active
+        or user.token_version != token_version
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired session"
+        )
+
+    if not verify_password(
+        data.current_password,
+        user.hashed_password
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Incorrect current password"
+        )
+
+    if data.new_email == user.email:
+        raise HTTPException(
+            status_code=400,
+            detail="New email must be different"
+        )
+
+    existing_user = db.query(User).filter(
+        User.email == data.new_email
+    ).first()
+
+    if existing_user:
+        raise HTTPException(
+            status_code=409,
+            detail="Email already registered"
+        )
+
+    user.email = data.new_email
+    user.token_version += 1
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=409,
+            detail="Email already registered"
+        )
+
+    return {
+        "message": "Email updated successfully. Please log in again."
+    }
+
+@app.put("/users/me/password", response_model=UserSettingsResponse)
+def update_user_password(
+    data: UserPasswordUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    token_version = current_user.token_version
+
+    user = db.query(User).filter(
+        User.id == current_user.id
+    ).with_for_update().populate_existing().first()
+
+    if (
+        user is None
+        or not user.is_active
+        or user.token_version != token_version
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired session"
+        )
+
+    if not verify_password(
+        data.current_password,
+        user.hashed_password
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Incorrect current password"
+        )
+
+    if verify_password(
+        data.new_password,
+        user.hashed_password
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="New password must be different"
+        )
+
+    user.hashed_password = hash_password(data.new_password)
+    user.token_version += 1
+
+    db.commit()
+
+    return {
+        "message": "Password updated successfully. Please log in again."
     }
 # LABORATORY ENDPOINTS
 

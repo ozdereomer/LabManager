@@ -3,10 +3,12 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 from fastapi import HTTPException, status, Depends
+from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
+
 from app.database import get_db
 from app.models import User
-from fastapi.security import OAuth2PasswordBearer
+
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 
@@ -19,38 +21,49 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
 
-def create_access_token(email: str) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(
-        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
-    )
+def create_access_token(user: User) -> str:
+    now = datetime.now(timezone.utc)
 
     payload = {
-        "sub": email,
-        "exp": expire
+        "sub": str(user.id),
+        "ver": user.token_version,
+        "iat": now,
+        "exp": now + timedelta(
+            minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+        )
     }
 
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(
+        payload,
+        SECRET_KEY,
+        algorithm=ALGORITHM
+    )
 
 
-def decode_access_token(token: str) -> str:
+def decode_access_token(token: str) -> tuple[int, int]:
     try:
         payload = jwt.decode(
             token,
             SECRET_KEY,
-            algorithms=[ALGORITHM]
+            algorithms=[ALGORITHM],
+            options={
+                "require": ["sub", "ver", "iat", "exp"]
+            }
         )
 
-        email = payload.get("sub")
+        user_id = int(payload["sub"])
+        token_version = payload["ver"]
 
-        if not email:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token"
-            )
+        if (
+            user_id <= 0
+            or type(token_version) is not int
+            or token_version < 0
+        ):
+            raise ValueError("Invalid token claims")
 
-        return email
+        return user_id, token_version
 
-    except jwt.InvalidTokenError:
+    except (jwt.InvalidTokenError, ValueError, TypeError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
@@ -63,13 +76,17 @@ def get_current_user(
     db: Session = Depends(get_db)
 ) -> User:
 
-    email = decode_access_token(token)
+    user_id, token_version = decode_access_token(token)
 
     user = db.query(User).filter(
-        User.email == email
+        User.id == user_id
     ).first()
 
-    if not user or not user.is_active:
+    if (
+        user is None
+        or not user.is_active
+        or user.token_version != token_version
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
