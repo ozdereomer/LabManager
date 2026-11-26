@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import datetime, date
+from decimal import Decimal
 
 from sqlalchemy import (
     String,
@@ -6,10 +7,14 @@ from sqlalchemy import (
     ForeignKey,
     Boolean,
     DateTime,
+    Date,
+    Text,
+    Numeric,
     func
 )
 
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
 
 class Base(DeclarativeBase):
     pass
@@ -40,6 +45,42 @@ class Equipment(Base):
     laboratory_id: Mapped[int] = mapped_column(
         ForeignKey("laboratories.id")
     )
+class MaintenanceRecord(Base):
+    __tablename__ = "maintenance_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    equipment_id: Mapped[int] = mapped_column(
+        ForeignKey("equipment.id"),
+        nullable=False
+    )
+
+    maintenance_date: Mapped[date] = mapped_column(
+        Date,
+        nullable=False
+    )
+
+    description: Mapped[str] = mapped_column(
+        Text,
+        nullable=False
+    )
+
+    technician: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True
+    )
+
+    cost: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 2),
+        nullable=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False
+    )
+
 class User(Base):
     __tablename__ = "users"
 

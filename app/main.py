@@ -4,9 +4,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 import logging
 from app.database import engine, get_db
-from app.models import Laboratory, Equipment, User
+from app.models import Laboratory, Equipment, User, MaintenanceRecord
 from app.schemas.laboratory import LaboratoryCreate, LaboratoryResponse, LaboratoryUpdate
 from app.schemas.equipment import EquipmentCreate, EquipmentResponse, EquipmentUpdate
+from app.schemas.maintenance import (
+    MaintenanceCreate,
+    MaintenanceResponse,
+    MaintenanceUpdate
+)
 from app.schemas.auth import UserCreate, UserResponse, TokenResponse
 from app.security import hash_password, verify_password
 from app.auth import create_access_token, get_current_user
@@ -406,12 +411,173 @@ def delete_equipment(
             detail="Equipment not found"
         )
 
+    maintenance_exists = db.query(MaintenanceRecord).filter(
+        MaintenanceRecord.equipment_id == equipment_id
+    ).first()
+
+    if maintenance_exists is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete equipment with maintenance records"
+        )
+
     db.delete(equipment)
     db.commit()
 
     return {
         "message": "Equipment deleted successfully",
         "equipment_id": equipment_id
+    }
+
+# MAINTENANCE ENDPOINTS
+
+@app.get("/maintenance", response_model=list[MaintenanceResponse])
+def get_maintenance_records(
+    equipment_id: int | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    query = db.query(MaintenanceRecord).join(
+        Equipment,
+        MaintenanceRecord.equipment_id == Equipment.id
+    ).join(
+        Laboratory,
+        Equipment.laboratory_id == Laboratory.id
+    ).filter(
+        Laboratory.user_id == current_user.id
+    )
+
+    if equipment_id is not None:
+        query = query.filter(
+            MaintenanceRecord.equipment_id == equipment_id
+        )
+
+    return query.order_by(
+        MaintenanceRecord.maintenance_date.desc()
+    ).all()
+
+
+@app.post(
+    "/maintenance",
+    response_model=MaintenanceResponse,
+    status_code=201
+)
+def create_maintenance_record(
+    maintenance: MaintenanceCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    equipment = db.query(Equipment).join(
+        Laboratory,
+        Equipment.laboratory_id == Laboratory.id
+    ).filter(
+        Equipment.id == maintenance.equipment_id,
+        Laboratory.user_id == current_user.id
+    ).first()
+
+    if equipment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Equipment not found"
+        )
+
+    new_record = MaintenanceRecord(
+        equipment_id=maintenance.equipment_id,
+        maintenance_date=maintenance.maintenance_date,
+        description=maintenance.description,
+        technician=maintenance.technician,
+        cost=maintenance.cost
+    )
+
+    db.add(new_record)
+    db.commit()
+    db.refresh(new_record)
+
+    return new_record
+
+
+@app.put(
+    "/maintenance/{maintenance_id}",
+    response_model=MaintenanceResponse
+)
+def update_maintenance_record(
+    maintenance_id: int,
+    maintenance: MaintenanceUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    existing_record = db.query(MaintenanceRecord).join(
+        Equipment,
+        MaintenanceRecord.equipment_id == Equipment.id
+    ).join(
+        Laboratory,
+        Equipment.laboratory_id == Laboratory.id
+    ).filter(
+        MaintenanceRecord.id == maintenance_id,
+        Laboratory.user_id == current_user.id
+    ).first()
+
+    if existing_record is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Maintenance record not found"
+        )
+
+    equipment = db.query(Equipment).join(
+        Laboratory,
+        Equipment.laboratory_id == Laboratory.id
+    ).filter(
+        Equipment.id == maintenance.equipment_id,
+        Laboratory.user_id == current_user.id
+    ).first()
+
+    if equipment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Equipment not found"
+        )
+
+    existing_record.equipment_id = maintenance.equipment_id
+    existing_record.maintenance_date = maintenance.maintenance_date
+    existing_record.description = maintenance.description
+    existing_record.technician = maintenance.technician
+    existing_record.cost = maintenance.cost
+
+    db.commit()
+    db.refresh(existing_record)
+
+    return existing_record
+
+
+@app.delete("/maintenance/{maintenance_id}")
+def delete_maintenance_record(
+    maintenance_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    record = db.query(MaintenanceRecord).join(
+        Equipment,
+        MaintenanceRecord.equipment_id == Equipment.id
+    ).join(
+        Laboratory,
+        Equipment.laboratory_id == Laboratory.id
+    ).filter(
+        MaintenanceRecord.id == maintenance_id,
+        Laboratory.user_id == current_user.id
+    ).first()
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Maintenance record not found"
+        )
+
+    db.delete(record)
+    db.commit()
+
+    return {
+        "message": "Maintenance record deleted successfully",
+        "maintenance_id": maintenance_id
     }
 @app.put("/laboratories/{laboratory_id}", response_model=LaboratoryResponse)
 def update_laboratory(
