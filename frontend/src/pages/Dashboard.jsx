@@ -1,25 +1,105 @@
-const laboratories = [
-  { id: 1, name: 'Yazılım Laboratuvarı', location: 'A Blok / 101', equipment: 24, status: 'Aktif' },
-  { id: 2, name: 'Elektronik Laboratuvarı', location: 'B Blok / 205', equipment: 18, status: 'Aktif' },
-  { id: 3, name: 'Robotik Laboratuvarı', location: 'C Blok / 110', equipment: 12, status: 'Bakımda' },
-  { id: 4, name: 'Bilgisayar Laboratuvarı', location: 'A Blok / 204', equipment: 32, status: 'Aktif' },
-]
-
-const activities = [
-  { title: 'Yeni ekipman eklendi: Arduino Uno', time: 'Bugün, 14:32' },
-  { title: 'Yazılım Laboratuvarı oluşturuldu', time: 'Bugün, 11:15' },
-  { title: 'Osiloskop bakım durumuna alındı', time: 'Dün, 16:40' },
-  { title: 'Yeni ekipman kaydı güncellendi', time: 'Dün, 10:20' },
-]
-
-const stats = [
-  { label: 'Toplam Laboratuvar', value: '12', icon: '⌂', description: 'Kayıtlı laboratuvar sayısı' },
-  { label: 'Toplam Ekipman', value: '86', icon: '▣', description: 'Kayıtlı ekipman sayısı' },
-  { label: 'Aktif Ekipman', value: '78', icon: '✓', description: 'Kullanıma hazır ekipman' },
-  { label: 'Bakımda', value: '8', icon: '⚙', description: 'Bakım bekleyen ekipman' },
-]
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import api from '../services/api'
 
 function Dashboard() {
+  const [dashboard, setDashboard] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+
+    async function fetchDashboard() {
+      try {
+        const response = await api.get('/dashboard')
+
+        if (active) {
+          setDashboard(response.data)
+        }
+      } catch {
+        if (active) {
+          setError('Dashboard verileri yüklenemedi.')
+        }
+      } finally {
+        if (active) {
+          setLoading(false)
+        }
+      }
+    }
+
+    fetchDashboard()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  if (loading) {
+    return <p>Dashboard yükleniyor...</p>
+  }
+
+  if (error) {
+    return <div className="auth-error">{error}</div>
+  }
+
+  if (!dashboard) {
+    return <p>Dashboard verisi bulunamadı.</p>
+  }
+
+  const { stats, laboratories, recent_maintenance, user_email } = dashboard
+
+  const cards = [
+    {
+      label: 'Toplam Laboratuvar',
+      value: stats.total_laboratories,
+      icon: '⌂',
+      description: 'Kayıtlı laboratuvar sayısı'
+    },
+    {
+      label: 'Toplam Ekipman',
+      value: stats.total_equipment,
+      icon: '▣',
+      description: 'Kayıtlı ekipman sayısı'
+    },
+    {
+      label: 'Aktif Ekipman',
+      value: stats.available_equipment,
+      icon: '✓',
+      description: 'Kullanıma hazır ekipman'
+    },
+    {
+      label: 'Bakımda',
+      value: stats.maintenance_equipment,
+      icon: '⚙',
+      description: 'Bakım durumundaki ekipman'
+    },
+    {
+      label: 'Arızalı Ekipman',
+      value: stats.broken_equipment,
+      icon: '!',
+      description: 'Arızalı ekipman sayısı'
+    },
+    {
+      label: 'Bakım Kayıtları',
+      value: stats.total_maintenance_records,
+      icon: '▤',
+      description: 'Toplam bakım kaydı'
+    },
+    {
+      label: 'Toplam Bakım Maliyeti',
+      value: Number(stats.total_maintenance_cost).toLocaleString(
+        'tr-TR',
+        {
+          style: 'currency',
+          currency: 'TRY'
+        }
+      ),
+      icon: '₺',
+      description: 'Kayıtlı bakım maliyetleri'
+    }
+  ]
+
   return (
     <>
       <header className="topbar">
@@ -31,10 +111,13 @@ function Dashboard() {
         </div>
 
         <div className="profile">
-          <div className="avatar">A</div>
+          <div className="avatar">
+            {user_email.charAt(0).toUpperCase()}
+          </div>
+
           <div>
-            <div className="profile-name">Admin</div>
-            <div className="profile-role">Yönetici</div>
+            <div className="profile-name">{user_email}</div>
+            <div className="profile-role">Kullanıcı</div>
           </div>
         </div>
       </header>
@@ -43,14 +126,18 @@ function Dashboard() {
         <h2 className="section-heading">Genel Bakış</h2>
 
         <div className="stats-grid">
-          {stats.map((stat) => (
+          {cards.map((stat) => (
             <div className="stat-card" key={stat.label}>
               <div className="stat-top">
                 <span className="stat-label">{stat.label}</span>
                 <span className="stat-icon">{stat.icon}</span>
               </div>
+
               <div className="stat-value">{stat.value}</div>
-              <div className="stat-description">{stat.description}</div>
+
+              <div className="stat-description">
+                {stat.description}
+              </div>
             </div>
           ))}
         </div>
@@ -60,7 +147,10 @@ function Dashboard() {
         <section className="panel">
           <div className="panel-header">
             <h2 className="panel-title">Laboratuvarlar</h2>
-            <a href="/laboratories" className="panel-link">Tümünü Gör →</a>
+
+            <Link to="/laboratories" className="panel-link">
+              Tümünü Gör →
+            </Link>
           </div>
 
           <div className="table-wrapper">
@@ -70,26 +160,25 @@ function Dashboard() {
                   <th>LABORATUVAR</th>
                   <th>KONUM</th>
                   <th>EKİPMAN</th>
-                  <th>DURUM</th>
                 </tr>
               </thead>
+
               <tbody>
-                {laboratories.map((lab) => (
-                  <tr key={lab.id}>
-                    <td>{lab.name}</td>
-                    <td>{lab.location}</td>
-                    <td>{lab.equipment}</td>
-                    <td>
-                      <span className={`status ${
-                        lab.status === 'Aktif'
-                          ? 'status-active'
-                          : 'status-maintenance'
-                      }`}>
-                        {lab.status}
-                      </span>
+                {laboratories.length === 0 ? (
+                  <tr>
+                    <td colSpan={3}>
+                      Henüz kayıtlı laboratuvar bulunmuyor.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  laboratories.map((lab) => (
+                    <tr key={lab.id}>
+                      <td>{lab.name}</td>
+                      <td>{lab.location || '—'}</td>
+                      <td>{lab.equipment_count}</td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -97,18 +186,48 @@ function Dashboard() {
 
         <section className="panel">
           <div className="panel-header">
-            <h2 className="panel-title">Son Aktiviteler</h2>
+            <h2 className="panel-title">Son Bakım İşlemleri</h2>
+
+            <Link to="/maintenance" className="panel-link">
+              Tümünü Gör →
+            </Link>
           </div>
 
-          {activities.map((activity, index) => (
-            <div className="activity-item" key={index}>
-              <div className="activity-dot"></div>
-              <div>
-                <div className="activity-title">{activity.title}</div>
-                <div className="activity-time">{activity.time}</div>
+          {recent_maintenance.length === 0 ? (
+            <p>Henüz bakım kaydı bulunmuyor.</p>
+          ) : (
+            recent_maintenance.map((record) => (
+              <div className="activity-item" key={record.id}>
+                <div className="activity-dot"></div>
+
+                <div>
+                  <div className="activity-title">
+                    {record.equipment_name}
+                  </div>
+
+                  <div className="activity-time">
+                    {record.description}
+                  </div>
+
+                  <div className="activity-time">
+                    {record.maintenance_date
+                      .split('-')
+                      .reverse()
+                      .join('.')}
+                  </div>
+
+                  {record.cost !== null && (
+                    <div className="activity-time">
+                      {Number(record.cost).toLocaleString('tr-TR', {
+                        style: 'currency',
+                        currency: 'TRY'
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            ))
+          )}
         </section>
       </div>
     </>

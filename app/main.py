@@ -1,3 +1,13 @@
+from decimal import Decimal
+from sqlalchemy import func, case
+
+from app.schemas.dashboard import (
+    DashboardStats,
+    DashboardLaboratory,
+    DashboardMaintenance,
+    DashboardResponse
+)
+
 from fastapi import FastAPI, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
@@ -638,3 +648,114 @@ def delete_laboratory(
         "message": "Laboratory deleted successfully",
         "laboratory_id": laboratory_id
     }
+# DASHBOARD ENDPOINT
+
+@app.get("/dashboard", response_model=DashboardResponse)
+def get_dashboard(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Laboratuvar sayısı
+    total_laboratories = db.query(
+        func.count(Laboratory.id)
+    ).filter(
+        Laboratory.user_id == current_user.id
+    ).scalar()
+
+    # Ekipman istatistikleri
+    equipment_stats = db.query(
+        func.count(Equipment.id).label("total"),
+        func.coalesce(
+            func.sum(case((Equipment.status == "available", 1), else_=0)), 0
+        ).label("available"),
+        func.coalesce(
+            func.sum(case((Equipment.status == "maintenance", 1), else_=0)), 0
+        ).label("maintenance"),
+        func.coalesce(
+            func.sum(case((Equipment.status == "broken", 1), else_=0)), 0
+        ).label("broken")
+    ).join(
+        Laboratory,
+        Equipment.laboratory_id == Laboratory.id
+    ).filter(
+        Laboratory.user_id == current_user.id
+    ).one()
+
+    # Bakım istatistikleri
+    maintenance_stats = db.query(
+        func.count(MaintenanceRecord.id).label("total"),
+        func.coalesce(
+            func.sum(MaintenanceRecord.cost),
+            Decimal("0.00")
+        ).label("total_cost")
+    ).join(
+        Equipment,
+        MaintenanceRecord.equipment_id == Equipment.id
+    ).join(
+        Laboratory,
+        Equipment.laboratory_id == Laboratory.id
+    ).filter(
+        Laboratory.user_id == current_user.id
+    ).one()
+
+    # Laboratuvarlar ve ekipman sayıları
+    laboratories = db.query(
+        Laboratory.id,
+        Laboratory.name,
+        Laboratory.location,
+        func.count(Equipment.id).label("equipment_count")
+    ).outerjoin(
+        Equipment,
+        Equipment.laboratory_id == Laboratory.id
+    ).filter(
+        Laboratory.user_id == current_user.id
+    ).group_by(
+        Laboratory.id,
+        Laboratory.name,
+        Laboratory.location
+    ).order_by(
+        Laboratory.id
+    ).all()
+
+    # Son 5 bakım işlemi
+    recent_maintenance = db.query(
+        MaintenanceRecord.id,
+        MaintenanceRecord.equipment_id,
+        Equipment.name.label("equipment_name"),
+        MaintenanceRecord.maintenance_date,
+        MaintenanceRecord.description,
+        MaintenanceRecord.technician,
+        MaintenanceRecord.cost
+    ).join(
+        Equipment,
+        MaintenanceRecord.equipment_id == Equipment.id
+    ).join(
+        Laboratory,
+        Equipment.laboratory_id == Laboratory.id
+    ).filter(
+        Laboratory.user_id == current_user.id
+    ).order_by(
+        MaintenanceRecord.maintenance_date.desc(),
+        MaintenanceRecord.id.desc()
+    ).limit(5).all()
+
+    return DashboardResponse(
+        user_email=current_user.email,
+        stats=DashboardStats(
+            total_laboratories=total_laboratories,
+            total_equipment=equipment_stats.total,
+            available_equipment=equipment_stats.available,
+            maintenance_equipment=equipment_stats.maintenance,
+            broken_equipment=equipment_stats.broken,
+            total_maintenance_records=maintenance_stats.total,
+            total_maintenance_cost=maintenance_stats.total_cost
+        ),
+        laboratories=[
+            DashboardLaboratory(**row._mapping)
+            for row in laboratories
+        ],
+        recent_maintenance=[
+            DashboardMaintenance(**row._mapping)
+            for row in recent_maintenance
+        ]
+    )
