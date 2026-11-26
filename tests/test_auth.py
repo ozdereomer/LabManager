@@ -102,7 +102,9 @@ def test_access_protected_endpoint_with_expired_token(client):
 
     expired_token = jwt.encode(
         {
-            "sub": "test@example.com",
+            "sub": "1",
+            "ver": 0,
+            "iat": datetime.now(timezone.utc) - timedelta(minutes=31),
             "exp": datetime.now(timezone.utc) - timedelta(minutes=1)
         },
         SECRET_KEY,

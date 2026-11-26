@@ -13,6 +13,7 @@ COPY migrations/ ./migrations/
 COPY tests/ ./tests/
 
 COPY alembic.ini .
+COPY pytest.ini .
 
 RUN groupadd --system app && \
     useradd --system --gid app --home-dir /app app && \

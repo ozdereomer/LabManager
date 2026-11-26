@@ -5,7 +5,7 @@ from app.schemas.user import (
     UserSettingsResponse
 )
 from decimal import Decimal
-from sqlalchemy import func, case
+from sqlalchemy import func, case, select
 
 from app.schemas.dashboard import (
     DashboardStats,
@@ -346,9 +346,9 @@ def get_equipment_stats(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    user_laboratory_ids = db.query(Laboratory.id).filter(
+    user_laboratory_ids = select(Laboratory.id).where(
         Laboratory.user_id == current_user.id
-    ).subquery()
+    )
 
     total = db.query(Equipment).filter(
         Equipment.laboratory_id.in_(user_laboratory_ids)

@@ -20,3 +20,9 @@ venv/
 
 # Logs
 *.log
+
+# Python test coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
