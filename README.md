@@ -1,5 +1,7 @@
 # LabManager – Laboratory and Equipment Management API
 
+[![LabManager CI](https://github.com/ozdereomer/LabManager/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ozdereomer/LabManager/actions/workflows/ci.yml)
+
 LabManager is a RESTful API built with FastAPI for managing laboratories and their equipment. It provides CRUD operations, filtering, sorting, pagination, equipment statistics, and database integration.
 
 ## Features
