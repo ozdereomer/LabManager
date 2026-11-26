@@ -9,7 +9,9 @@
 ![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED)
 ![Nginx](https://img.shields.io/badge/Nginx-Reverse_Proxy-009639)
 ![Redis](https://img.shields.io/badge/Redis-8-DC382D)
-![Tests](https://img.shields.io/badge/Tests-385_passing-brightgreen)
+![Prometheus](https://img.shields.io/badge/Prometheus-Monitoring-E6522C)
+![Grafana](https://img.shields.io/badge/Grafana-Observability-F46800)
+![Tests](https://img.shields.io/badge/Tests-412_passing-brightgreen)
 
 ## Overview
 
@@ -20,7 +22,8 @@ inventory management, maintenance tracking, and reporting.
 The application combines a FastAPI REST API, a React frontend,
 PostgreSQL persistence, JWT authentication, Redis-backed rate
 limiting, automated testing, containerized backend deployment,
-and an Nginx reverse proxy with traffic protection.
+an Nginx reverse proxy with traffic protection, and
+Prometheus and Grafana for application observability.
 
 ## Features
 
@@ -81,6 +84,21 @@ and an Nginx reverse proxy with traffic protection.
 - Laboratory equipment distribution
 - Recent maintenance activity
 
+### Observability and Monitoring
+
+- Prometheus-compatible application metrics
+- HTTP request counts grouped by method, route, and status
+- Request duration histograms and P95 latency monitoring
+- In-progress HTTP request tracking
+- Authentication outcome metrics
+- Rate limit rejection and backend error metrics
+- Bearer token-protected metrics endpoint
+- Dedicated internal Docker monitoring network
+- Nginx protection against public metrics access
+- Version-controlled Grafana dashboard with 10 panels
+- Real-time monitoring with a 15-second scrape interval
+- Low-cardinality metric labels without user identifiers
+
 ## Technology Stack
 
 | Layer | Technologies |
@@ -99,6 +117,8 @@ and an Nginx reverse proxy with traffic protection.
 | Code Quality | ESLint |
 | Containerization | Docker, Docker Compose |
 | Web Server | Nginx |
+| Metrics | Prometheus, prometheus-client |
+| Observability | Grafana, PromQL |
 | CI | GitHub Actions |
 | Deployment | Bash, Python, rsync, flock |
 | Operating System | Ubuntu Server |
@@ -117,6 +137,14 @@ flowchart TD
     subgraph Internal Docker Network
         H
     end
+
+    subgraph Dedicated Monitoring Network
+        I[Prometheus]
+    end
+
+    I -->|Authenticated metrics scrape| E
+    J[Grafana] -->|PromQL queries| I
+    I --> K[Node Exporter]
 ```
 
 Nginx serves the compiled React application and forwards requests
@@ -142,6 +170,16 @@ PostgreSQL remains on a separately managed external Docker network.
 
 Redis stores temporary rate limit counters rather than laboratory
 records, equipment data, passwords, or JWT access tokens.
+
+Prometheus collects application metrics through a dedicated internal
+Docker network using Bearer token authentication.
+
+Grafana queries Prometheus to visualize API availability, traffic,
+latency, authentication outcomes, and rate limiting events.
+
+Nginx blocks access to the application metrics endpoint.
+Prometheus and Grafana are managed separately from the application
+stack and are bound to localhost in the current deployment.
 
 ## Database Relationships
 
@@ -199,6 +237,8 @@ LabManager/
 │   ├── security.py
 │   ├── rate_limiter.py
 │   ├── redis_client.py
+│   ├── metrics.py
+│   ├── monitoring.py
 │   ├── database.py
 │   ├── models.py
 │   └── schemas/
@@ -216,6 +256,8 @@ LabManager/
 │   ├── nginx/
 │   │   ├── labmanager.conf
 │   │   └── labmanager-rate-limit.conf
+│   ├── grafana/
+│   │   └── labmanager-dashboard.json
 │   ├── redis/
 │   │   └── users.acl (generated, ignored by Git)
 │   └── scripts/
@@ -350,9 +392,10 @@ cp -n .env.example .env
 chmod 600 .env
 ```
 
-Generate two independent random secrets locally:
+Generate three independent random secrets locally:
 
 ```bash
+openssl rand -hex 32
 openssl rand -hex 32
 openssl rand -hex 32
 ```
@@ -368,12 +411,16 @@ nano .env
 | POSTGRES_PASSWORD | Existing PostgreSQL application password |
 | JWT_SECRET_KEY | Independent JWT signing secret |
 | REDIS_PASSWORD | Independent 64-character lowercase hexadecimal password |
+| METRICS_TOKEN | Independent 64-character hexadecimal metrics access token |
 
 The PostgreSQL username and database name are fixed in compose.yaml.
 POSTGRES_USER and POSTGRES_DB document the expected configuration.
 
 Use a URL-safe database password or correctly encode reserved
 characters in the database connection URL.
+
+Use separate generated values for JWT_SECRET_KEY,
+REDIS_PASSWORD, and METRICS_TOKEN.
 
 Never commit real credentials, signing keys, ACL files, or access tokens.
 
@@ -435,6 +482,24 @@ The PostgreSQL container is managed separately from this
 repository's Compose services.
 
 ### Start the Backend
+
+Create the dedicated monitoring network before starting the API.
+This is required even when Prometheus is not installed.
+
+```bash
+sudo docker network inspect labmanager_monitoring >/dev/null 2>&1 || \
+    sudo docker network create --driver bridge --internal labmanager_monitoring
+```
+
+Verify that the network is internal:
+
+```bash
+sudo docker network inspect labmanager_monitoring --format '{{.Internal}}'
+```
+
+The expected output is true. Do not proceed if an existing network
+with this name is not internal.
+
 
 ```bash
 sudo docker compose up -d --build redis api
@@ -510,10 +575,10 @@ direct backend tunnel rather than the Nginx API prefix.
 
 | Test suite | Passing tests | Measured coverage |
 |---|---:|---:|
-| Backend | 157 | 100% |
+| Backend | 184 | 100% |
 | Redis integration | 16 | Not measured separately |
 | Frontend | 212 | 100% |
-| Total | 385 | |
+| Total | 412 | |
 
 These results describe the latest verified local test runs.
 
@@ -813,6 +878,252 @@ possible filesystem and permission failure.
 Automatic backup and old asset retention policies are
 planned improvements.
 
+## Application Observability
+
+LabManager exposes application-level metrics using the
+Prometheus Python client and a custom ASGI monitoring middleware.
+
+Prometheus collects metrics every 15 seconds, while Grafana
+provides a version-controlled operational dashboard.
+
+### Available Metrics
+
+| Metric | Type | Labels |
+|---|---|---|
+| labmanager_http_requests_total | Counter | method, route, status |
+| labmanager_http_request_duration_seconds | Histogram | method, route |
+| labmanager_http_requests_in_progress | Gauge | None |
+| labmanager_authentication_attempts_total | Counter | outcome |
+| labmanager_rate_limit_rejections_total | Counter | scope |
+| labmanager_rate_limit_errors_total | Counter | scope |
+
+HTTP route templates are used instead of raw request paths
+to reduce metric cardinality.
+
+Unmatched routes are grouped under a shared label.
+Unexpected HTTP methods are grouped under OTHER.
+
+Metric labels do not contain email addresses, user IDs,
+passwords, JWTs, or raw query parameters.
+
+### Metrics Endpoint
+
+The API exposes GET /metrics on its internal HTTP interface.
+
+- A valid Bearer token is required.
+- Missing or incorrect credentials return HTTP 401.
+- Missing server-side token configuration returns HTTP 503.
+- The endpoint is excluded from the OpenAPI schema.
+- Metrics collection requests are excluded from normal HTTP metrics.
+- Nginx blocks /api/metrics with HTTP 404.
+
+Verify unauthenticated access:
+
+```bash
+curl -s -o /dev/null -w 'HTTP %{http_code}\\n' \
+    http://127.0.0.1:8001/metrics
+```
+
+The expected response is HTTP 401.
+
+After installing the Nginx configuration, verify proxy protection:
+
+```bash
+curl -s -o /dev/null -w 'HTTP %{http_code}\\n' \
+    http://127.0.0.1/api/metrics
+```
+
+The expected response is HTTP 404.
+
+### Prometheus Token File
+
+Prometheus uses a read-only credential file instead of storing
+the metrics token directly in its YAML configuration.
+
+The following example assumes that Prometheus runs with
+UID and GID 65534. Verify these values for your deployment.
+
+From the repository root, create the credential file:
+
+```bash
+sudo python3 - <<'TOKENPY'
+import os
+import re
+from pathlib import Path
+
+values = [
+    line.split("=", 1)[1]
+    for line in Path(".env").read_text().splitlines()
+    if line.startswith("METRICS_TOKEN=")
+]
+
+if len(values) != 1:
+    raise SystemExit("Expected exactly one METRICS_TOKEN")
+
+token = values[0]
+
+if not re.fullmatch(r"[0-9a-f]{64}", token):
+    raise SystemExit("Invalid metrics token format")
+
+directory = Path("/etc/labmanager-monitoring")
+directory.mkdir(mode=0o700, exist_ok=True)
+os.chown(directory, 0, 0)
+directory.chmod(0o700)
+
+target = directory / "metrics-token"
+
+fd = os.open(
+    target,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+    0o400
+)
+
+with os.fdopen(fd, "w") as output:
+    output.write(token)
+    output.flush()
+    os.fchown(output.fileno(), 65534, 65534)
+    os.fchmod(output.fileno(), 0o400)
+
+print("Metrics credential file created")
+TOKENPY
+```
+
+This command does not display the token and refuses to
+overwrite an existing credential file.
+
+Keep the credential file outside the repository.
+Token rotation requires coordinated updates to the API
+environment and the Prometheus credential file.
+
+### Prometheus Configuration
+
+Prometheus and Grafana are managed separately from the
+LabManager application stack.
+
+Create the monitoring network as described in the
+backend installation instructions.
+
+Add the following job to the existing Prometheus
+scrape_configs list:
+
+```yaml
+  - job_name: labmanager
+    scrape_interval: 15s
+    scrape_timeout: 5s
+    metrics_path: /metrics
+    scheme: http
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/metrics-token
+    static_configs:
+      - targets: ['labmanager-api:8000']
+```
+
+Merge the following settings into the existing monitoring
+Docker Compose configuration:
+
+```yaml
+services:
+  prometheus:
+    volumes:
+      - type: bind
+        source: /etc/labmanager-monitoring/metrics-token
+        target: /run/secrets/metrics-token
+        read_only: true
+    networks:
+      - default
+      - labmanager_monitoring
+
+networks:
+  default:
+  labmanager_monitoring:
+    external: true
+    name: labmanager_monitoring
+```
+
+This is a configuration fragment, not a complete Compose file.
+
+Preserve the existing Prometheus configuration mount,
+persistent storage, image settings, and other scrape jobs.
+
+Validate the configuration with promtool before redeployment.
+
+Back up the existing configuration and recreate Prometheus
+without removing its persistent volume.
+
+Verify that the Prometheus targets page reports the
+labmanager job as UP.
+
+### Grafana Dashboard
+
+The dashboard definition is stored at:
+
+```text
+deploy/grafana/labmanager-dashboard.json
+```
+
+Configure a Prometheus data source in Grafana.
+
+Import the JSON file through Dashboards > New > Import
+and select the Prometheus data source.
+
+The dashboard contains ten panels:
+
+- API Availability
+- Requests per Second
+- Server Error Rate
+- P95 Response Time
+- HTTP Traffic by Status
+- Average and P95 Latency
+- Active Requests
+- Authentication Attempts
+- Rate Limit Rejections
+- Rate Limiter Errors
+
+The default time range is 15 minutes.
+The dashboard refresh interval is 15 seconds.
+Rate and latency calculations use five-minute windows.
+
+The dashboard uses the stable UID labmanager-observability.
+
+### Remote Monitoring Access
+
+The current deployment binds Grafana and Prometheus
+to localhost rather than exposing them publicly.
+
+Access Grafana through an SSH tunnel:
+
+```bash
+ssh -N -L 127.0.0.1:3001:127.0.0.1:3000 user@server
+```
+
+Open http://127.0.0.1:3001 in your browser.
+
+Replace user and server with your SSH connection details.
+
+### Monitoring Limitations
+
+- Metrics are stored in the API process and reset on restart.
+- The current implementation assumes a single Uvicorn worker.
+- Multi-worker metrics aggregation is not configured.
+- Prometheus scrape availability is not a complete database
+  or Redis readiness check.
+- Metrics describe requests reaching FastAPI, not requests
+  rejected directly by Nginx.
+- Authentication outcome metrics exclude attempts rejected
+  before credential evaluation.
+- Event-specific metric series appear after the first event.
+- No data does not necessarily mean zero events or a healthy service.
+- Prometheus increase() can produce fractional estimates.
+- P95 latency is estimated from histogram buckets.
+- Short-lived requests may not appear in sampled in-progress metrics.
+- The monitoring connection uses HTTP inside the Docker network.
+- Privileged Docker users can access container credentials.
+- Dashboard thresholds are initial visual indicators,
+  not validated service-level objectives.
+- Automated alerting and comprehensive load testing
+  are not implemented.
+
 ## Security
 
 ### Application Security
@@ -1000,6 +1311,97 @@ of an application image rollback.
 The rate limiting deployment and smoke tests have been verified
 locally. A complete production rollback has not been executed.
 
+### Observability Deployment Rollback
+
+Before deploying monitoring changes, preserve:
+
+- The previous production API image.
+- The installed Nginx configuration.
+- The Prometheus configuration file.
+- The monitoring Docker Compose configuration.
+- Existing Prometheus and Grafana persistent volumes.
+
+The following rollback procedure assumes that these
+backups were created before deployment.
+
+#### Restore Prometheus
+
+Restore the previous Prometheus configuration and
+monitoring Compose definition from their backups.
+
+Validate the restored configuration with promtool.
+
+Redeploy the monitoring stack without pulling new images
+or removing persistent volumes.
+
+Verify that the original Prometheus and Node Exporter
+scrape targets are healthy.
+
+#### Restore the API Image
+
+The previous API image is retained locally under
+the labmanager-api:before-observability tag.
+
+```bash
+sudo docker image inspect labmanager-api:before-observability >/dev/null
+
+sudo docker image tag labmanager-api:before-observability labmanager-api:latest
+
+sudo docker compose up -d --no-deps --no-build --force-recreate api
+```
+
+This restores the previous application image but does
+not restore the previous Compose configuration.
+
+Keep the metrics access protection in Nginx during
+the rollback unless there is a specific reason to restore
+the previous proxy configuration.
+
+#### Restore Nginx If Required
+
+The previous Nginx configuration is stored outside
+the repository in the server backup directory.
+
+```bash
+sudo install -m 644 /var/backups/labmanager/nginx/labmanager-before-observability.conf /etc/nginx/sites-available/labmanager
+
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Only restore the previous Nginx configuration when needed.
+It does not contain the new metrics access protection.
+
+#### Verify Application Recovery
+
+```bash
+curl -fsS http://127.0.0.1:8001/health
+
+curl -fsS http://127.0.0.1/api/health
+
+curl -fsS -o /dev/null http://127.0.0.1/
+
+sudo docker compose ps
+```
+
+Allow the API sufficient startup time before checking health.
+
+Verify authentication, laboratory management, equipment
+management, and maintenance operations through the frontend.
+
+Do not delete PostgreSQL, Redis, Prometheus, or Grafana
+persistent volumes during rollback.
+
+The monitoring network can remain in place.
+Remove it only after all attached containers have been
+disconnected and the network is no longer required.
+
+This procedure does not perform a complete infrastructure
+or database rollback.
+
+The backup files and previous API image were verified
+during deployment, but a complete observability rollback
+has not been executed against the live environment.
+
 ## Roadmap
 
 - [x] Backend REST API
@@ -1027,7 +1429,14 @@ locally. A complete production rollback has not been executed.
 - [x] Frontend rate limit and outage handling
 - [ ] PostgreSQL integration and concurrency tests
 - [ ] Automated database backups and restore verification
-- [ ] Application metrics and monitoring
+- [x] Application metrics and monitoring
+- [x] Authenticated Prometheus metrics endpoint
+- [x] Dedicated internal monitoring network
+- [x] Version-controlled Grafana dashboard
+- [x] Live HTTP and rate limiting metrics verification
+- [ ] Automated monitoring alerts and notifications
+- [ ] Performance and load testing
+- [ ] Structured logging and request correlation
 - [ ] Automated browser end-to-end tests
 - [ ] Deployment retention policies
 - [ ] Continuous delivery pipeline
