@@ -19,6 +19,9 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 import logging
+import os
+import secrets
+from fastapi import Header
 from app.database import engine, get_db
 from app.models import Laboratory, Equipment, User, MaintenanceRecord
 from app.schemas.laboratory import LaboratoryCreate, LaboratoryResponse, LaboratoryUpdate
@@ -32,8 +35,11 @@ from app.schemas.auth import UserCreate, UserResponse, TokenResponse
 from app.security import hash_password, verify_password
 from app.auth import create_access_token, get_current_user
 from app.rate_limiter import enforce_rate_limit
+from app.monitoring import MonitoringMiddleware
+from app.metrics import metrics
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi.exceptions import RequestValidationError
 logging.basicConfig(
     level=logging.INFO,
@@ -88,6 +94,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.add_middleware(MonitoringMiddleware)
+
+
 @app.get("/")
 def home():
     return {
@@ -101,6 +110,34 @@ def health():
     return {
         "status": "healthy"
     }
+
+
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics(
+    authorization: str | None = Header(default=None),
+):
+    token = os.getenv("METRICS_TOKEN")
+
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail="Metrics service unavailable",
+        )
+
+    expected = f"Bearer {token}".encode("utf-8")
+    provided = (authorization or "").encode("utf-8")
+
+    if not secrets.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return Response(
+        content=generate_latest(metrics.registry),
+        headers={"Content-Type": CONTENT_TYPE_LATEST},
+    )
 
 
 # AUTHENTICATION ENDPOINTS
@@ -159,6 +196,9 @@ def login_user(
         form_data.password,
         user.hashed_password
     ):
+        metrics.authentication_attempts.labels(
+            outcome="invalid_credentials"
+        ).inc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -166,12 +206,18 @@ def login_user(
         )
 
     if not user.is_active:
+        metrics.authentication_attempts.labels(
+            outcome="inactive_user"
+        ).inc()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Inactive user"
         )
 
     access_token = create_access_token(user)
+    metrics.authentication_attempts.labels(
+        outcome="success"
+    ).inc()
 
     return {
         "access_token": access_token,

@@ -7,6 +7,7 @@ from redis.exceptions import RedisError
 
 from app.auth import SECRET_KEY
 from app.redis_client import get_redis_client
+from app.metrics import metrics
 
 
 logger = logging.getLogger("labmanager")
@@ -59,6 +60,12 @@ def enforce_rate_limit(
     if limit <= 0 or window_seconds <= 0:
         raise ValueError("Rate limit settings must be positive")
 
+    metric_scope = scope if scope in {
+        "register-global", "register",
+        "login-global", "login",
+        "update-email", "update-password",
+    } else "other"
+
     key = build_rate_limit_key(scope, identifier)
 
     try:
@@ -73,6 +80,9 @@ def enforce_rate_limit(
         )
 
     except (RedisError, RuntimeError):
+        metrics.rate_limit_errors.labels(
+            scope=metric_scope
+        ).inc()
         logger.error("Rate limiting service unavailable")
 
         raise HTTPException(
@@ -81,6 +91,9 @@ def enforce_rate_limit(
         )
 
     if not allowed:
+        metrics.rate_limit_rejections.labels(
+            scope=metric_scope
+        ).inc()
         raise HTTPException(
             status_code=429,
             detail="Too many requests. Please try again later.",
