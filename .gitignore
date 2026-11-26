@@ -1,8 +1,7 @@
 # Environment variables
 .env
-.env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -28,3 +27,6 @@ htmlcov/
 coverage.xml
 
 .frontend-deploy.lock
+
+# Redis private ACL configuration
+deploy/redis/users.acl

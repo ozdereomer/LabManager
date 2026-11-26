@@ -666,3 +666,102 @@ describe('Settings component', () => {
     ).toBeEnabled()
   })
 })
+
+describe('Settings rate limiting and service availability', () => {
+  const scenarios = [
+    [
+      429,
+      { 'retry-after': '45' },
+      'Çok fazla işlem yaptınız. Lütfen 45 saniye sonra tekrar deneyin.',
+    ],
+    [
+      429,
+      {},
+      'Çok fazla istek gönderdiniz. Lütfen bir süre sonra tekrar deneyin.',
+    ],
+    [
+      503,
+      {},
+      'Hizmet geçici olarak kullanılamıyor. Lütfen daha sonra tekrar deneyin.',
+    ],
+  ]
+
+  beforeEach(() => {
+    api.get.mockReset()
+    api.put.mockReset()
+    vi.spyOn(window, 'alert').mockImplementation(() => {})
+  })
+
+  it.each(scenarios)(
+    'handles profile loading error %s with headers %j',
+    async (status, headers, message) => {
+      api.get.mockRejectedValueOnce({
+        response: { status, headers },
+      })
+
+      const onLogout = vi.fn()
+
+      render(<Settings onLogout={onLogout} />)
+
+      expect(
+        await screen.findByText(message)
+      ).toBeInTheDocument()
+
+      expect(onLogout).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(scenarios)(
+    'handles email update error %s with headers %j',
+    async (status, headers, message) => {
+      api.put.mockRejectedValueOnce({
+        response: { status, headers },
+      })
+
+      const { user, onLogout } = renderSettings()
+
+      await fillEmailForm(user)
+      await submitEmailForm(user)
+
+      expect(
+        await screen.findByText(message)
+      ).toBeInTheDocument()
+
+      expect(onLogout).not.toHaveBeenCalled()
+      expect(window.alert).not.toHaveBeenCalled()
+
+      expect(
+        getEmailForm().getByRole('button', {
+          name: 'E-postayı Güncelle',
+        })
+      ).toBeEnabled()
+    }
+  )
+
+  it.each(scenarios)(
+    'handles password update error %s with headers %j',
+    async (status, headers, message) => {
+      api.put.mockRejectedValueOnce({
+        response: { status, headers },
+      })
+
+      const { user, onLogout } = renderSettings()
+
+      await fillPasswordForm(user)
+      await submitPasswordForm(user)
+
+      expect(
+        await screen.findByText(message)
+      ).toBeInTheDocument()
+
+      expect(onLogout).not.toHaveBeenCalled()
+      expect(window.alert).not.toHaveBeenCalled()
+
+      expect(
+        getPasswordForm().getByRole('button', {
+          name: 'Şifreyi Güncelle',
+        })
+      ).toBeEnabled()
+    }
+  )
+})

@@ -31,6 +31,7 @@ from app.schemas.maintenance import (
 from app.schemas.auth import UserCreate, UserResponse, TokenResponse
 from app.security import hash_password, verify_password
 from app.auth import create_access_token, get_current_user
+from app.rate_limiter import enforce_rate_limit
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -109,6 +110,9 @@ def register_user(
     user: UserCreate,
     db: Session = Depends(get_db)
 ):
+    enforce_rate_limit("register-global", "global", 30, 60)
+    enforce_rate_limit("register", user.email.casefold(), 3, 60)
+
     existing_user = db.query(User).filter(
         User.email == user.email
     ).first()
@@ -144,6 +148,9 @@ def login_user(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
+    enforce_rate_limit("login-global", "global", 100, 60)
+    enforce_rate_limit("login", form_data.username.strip().casefold(), 5, 60)
+
     user = db.query(User).filter(
         User.email == form_data.username
     ).first()
@@ -184,6 +191,8 @@ def update_user_email(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    enforce_rate_limit("update-email", str(current_user.id), 5, 60)
+
     token_version = current_user.token_version
 
     user = db.query(User).filter(
@@ -248,6 +257,8 @@ def update_user_password(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    enforce_rate_limit("update-password", str(current_user.id), 5, 60)
+
     token_version = current_user.token_version
 
     user = db.query(User).filter(

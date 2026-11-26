@@ -1,7 +1,8 @@
 # Secrets and environment files
 .env
 .env.*
-!.env.example
+**/.env
+**/.env.*
 
 # Git
 .git
@@ -35,3 +36,6 @@ nodesource_setup.sh
 
 # Documentation
 README.md
+
+# Redis private configuration
+deploy/redis/users.acl

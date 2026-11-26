@@ -23,6 +23,8 @@ function Auth({ onLogin }) {
           email,
           password,
         })
+
+        setIsRegister(false)
       }
 
       const formData = new URLSearchParams()

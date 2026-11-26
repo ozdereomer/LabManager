@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import api from '../services/api'
+import { getApiErrorMessage } from '../utils/apiError'
 
 function Settings({ onLogout }) {
   const [profile, setProfile] = useState(null)
@@ -34,7 +35,13 @@ function Settings({ onLogout }) {
           return
         }
 
-        setError('Hesap bilgileri yüklenemedi.')
+        const status = err.response?.status
+
+        setError(
+          status === 429 || status === 503
+            ? getApiErrorMessage(err)
+            : 'Hesap bilgileri yüklenemedi.'
+        )
       } finally {
         if (active) {
           setLoading(false)
@@ -50,6 +57,12 @@ function Settings({ onLogout }) {
   }, [onLogout])
 
   function getErrorMessage(err) {
+    const status = err.response?.status
+
+    if (status === 429 || status === 503) {
+      return getApiErrorMessage(err)
+    }
+
     const detail = err.response?.data?.detail
 
     const messages = {
