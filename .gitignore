@@ -26,3 +26,5 @@ venv/
 .coverage.*
 htmlcov/
 coverage.xml
+
+.frontend-deploy.lock
