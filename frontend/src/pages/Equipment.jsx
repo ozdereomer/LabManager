@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import api from '../services/api'
+import { getApiErrorMessage } from '../utils/apiError'
 
 const statusLabels = {
   available: 'Kullanılabilir',
@@ -33,8 +34,7 @@ function Equipment() {
         setLaboratories(laboratoryResponse.data)
       } catch (err) {
         setError(
-          err.response?.data?.detail ||
-          'Veriler yüklenirken bir hata oluştu.'
+          getApiErrorMessage(err, 'Veriler yüklenirken bir hata oluştu.')
         )
       } finally {
         setLoading(false)
@@ -100,8 +100,7 @@ function Equipment() {
       resetForm()
     } catch (err) {
       setFormError(
-        err.response?.data?.detail ||
-        'İşlem sırasında bir hata oluştu.'
+        getApiErrorMessage(err, 'İşlem sırasında bir hata oluştu.')
       )
     } finally {
       setSaving(false)
@@ -123,8 +122,7 @@ function Equipment() {
       )
     } catch (err) {
       setError(
-        err.response?.data?.detail ||
-        'Ekipman silinirken bir hata oluştu.'
+        getApiErrorMessage(err, 'Ekipman silinirken bir hata oluştu.')
       )
     }
   }

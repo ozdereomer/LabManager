@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import api from '../services/api'
+import { getApiErrorMessage } from '../utils/apiError'
 
 function Maintenance() {
   const [records, setRecords] = useState([])
@@ -30,8 +31,7 @@ function Maintenance() {
         setEquipment(equipmentResponse.data)
       } catch (err) {
         setError(
-          err.response?.data?.detail ||
-          'Veriler yüklenirken bir hata oluştu.'
+          getApiErrorMessage(err, 'Veriler yüklenirken bir hata oluştu.')
         )
       } finally {
         setLoading(false)
@@ -106,8 +106,7 @@ function Maintenance() {
       resetForm()
     } catch (err) {
       setFormError(
-        err.response?.data?.detail ||
-        'İşlem sırasında bir hata oluştu.'
+        getApiErrorMessage(err, 'İşlem sırasında bir hata oluştu.')
       )
     } finally {
       setSaving(false)
@@ -129,8 +128,7 @@ function Maintenance() {
       )
     } catch (err) {
       setError(
-        err.response?.data?.detail ||
-        'Bakım kaydı silinirken bir hata oluştu.'
+        getApiErrorMessage(err, 'Bakım kaydı silinirken bir hata oluştu.')
       )
     }
   }

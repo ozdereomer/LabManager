@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import api from '../services/api'
+import { getApiErrorMessage } from '../utils/apiError'
 
 function Laboratories() {
   const [laboratories, setLaboratories] = useState([])
@@ -19,8 +20,7 @@ function Laboratories() {
         setLaboratories(response.data)
       } catch (err) {
         setError(
-          err.response?.data?.detail ||
-          'Laboratuvarlar yüklenirken bir hata oluştu.'
+          getApiErrorMessage(err, 'Laboratuvarlar yüklenirken bir hata oluştu.')
         )
       } finally {
         setLoading(false)
@@ -83,8 +83,7 @@ function Laboratories() {
       resetForm()
     } catch (err) {
       setFormError(
-        err.response?.data?.detail ||
-        'İşlem sırasında bir hata oluştu.'
+        getApiErrorMessage(err, 'İşlem sırasında bir hata oluştu.')
       )
     } finally {
       setSaving(false)
@@ -106,8 +105,7 @@ function Laboratories() {
       )
     } catch (err) {
       setError(
-        err.response?.data?.detail ||
-        'Laboratuvar silinirken bir hata oluştu.'
+        getApiErrorMessage(err, 'Laboratuvar silinirken bir hata oluştu.')
       )
     }
   }

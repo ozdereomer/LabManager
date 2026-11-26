@@ -31,7 +31,6 @@ function Settings({ onLogout }) {
         if (!active) return
 
         if (err.response?.status === 401) {
-          onLogout()
           return
         }
 
@@ -64,7 +63,11 @@ function Settings({ onLogout }) {
       return 'Lütfen girdiğiniz bilgileri kontrol edin.'
     }
 
-    return messages[detail] || 'İşlem gerçekleştirilemedi.'
+    if (typeof detail === 'string' && Object.hasOwn(messages, detail)) {
+      return messages[detail]
+    }
+
+    return 'İşlem gerçekleştirilemedi.'
   }
 
   async function handleEmailUpdate(event) {
@@ -83,7 +86,6 @@ function Settings({ onLogout }) {
       onLogout()
     } catch (err) {
       if (err.response?.status === 401) {
-        onLogout()
         return
       }
 
@@ -128,7 +130,6 @@ function Settings({ onLogout }) {
       onLogout()
     } catch (err) {
       if (err.response?.status === 401) {
-        onLogout()
         return
       }
 

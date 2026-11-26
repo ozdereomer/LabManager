@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   BrowserRouter,
   Routes,
@@ -20,6 +20,24 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(
     Boolean(localStorage.getItem('access_token'))
   )
+
+  useEffect(() => {
+    function handleSessionExpired() {
+      setIsAuthenticated(false)
+    }
+
+    window.addEventListener(
+      'auth:expired',
+      handleSessionExpired
+    )
+
+    return () => {
+      window.removeEventListener(
+        'auth:expired',
+        handleSessionExpired
+      )
+    }
+  }, [])
 
   function handleLogin() {
     setIsAuthenticated(true)

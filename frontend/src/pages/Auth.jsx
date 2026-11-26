@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../services/api'
+import { getApiErrorMessage } from '../utils/apiError'
 
 function Auth({ onLogin }) {
   const [isRegister, setIsRegister] = useState(false)
@@ -38,12 +39,10 @@ function Auth({ onLogin }) {
       onLogin()
       navigate('/')
     } catch (err) {
-      setError(
-        err.response?.data?.detail || 'Bir hata oluştu. Tekrar deneyin.'
-      )
-    } finally {
-      setLoading(false)
-    }
+  setError(getApiErrorMessage(err))
+} finally {
+  setLoading(false)
+}
   }
 
   return (
