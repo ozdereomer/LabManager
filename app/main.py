@@ -35,20 +35,26 @@ from app.schemas.auth import UserCreate, UserResponse, TokenResponse
 from app.security import hash_password, verify_password
 from app.auth import create_access_token, get_current_user
 from app.rate_limiter import enforce_rate_limit
+from app.logging_config import configure_logging
 from app.monitoring import MonitoringMiddleware
+from app.request_logging import RequestLoggingMiddleware
 from app.metrics import metrics
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi.exceptions import RequestValidationError
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-)
+configure_logging()
 
 logger = logging.getLogger("labmanager")
 
-app = FastAPI(
+class LabManagerAPI(FastAPI):
+    def build_middleware_stack(self):
+        return RequestLoggingMiddleware(
+            super().build_middleware_stack()
+        )
+
+
+app = LabManagerAPI(
     title="LabManager API",
     description="Laboratuvar ve ekipman yönetim sistemi",
     version="0.1.0"
@@ -56,10 +62,17 @@ app = FastAPI(
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    logger.exception(
-        "Unhandled exception: %s %s",
-        request.method,
-        request.url.path
+    logger.error(
+        "unhandled_exception",
+        extra={
+            "route": getattr(
+                request.scope.get("route"),
+                "path",
+                "unmatched",
+            ),
+            "status_code": 500,
+            "error_type": type(exc).__name__,
+        },
     )
 
     return JSONResponse(

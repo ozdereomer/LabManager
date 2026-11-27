@@ -11,7 +11,7 @@
 ![Redis](https://img.shields.io/badge/Redis-8-DC382D)
 ![Prometheus](https://img.shields.io/badge/Prometheus-Monitoring-E6522C)
 ![Grafana](https://img.shields.io/badge/Grafana-Observability-F46800)
-![Tests](https://img.shields.io/badge/Tests-412_passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-457_passing-brightgreen)
 
 ## Overview
 
@@ -98,6 +98,11 @@ Prometheus and Grafana for application observability.
 - Version-controlled Grafana dashboard with 10 panels
 - Real-time monitoring with a 15-second scrape interval
 - Low-cardinality metric labels without user identifiers
+- Structured JSON application and Nginx access logging
+- End-to-end request ID correlation
+- Concurrent request context isolation
+- HTTP method and status normalization
+- Docker API log rotation
 
 ## Technology Stack
 
@@ -119,6 +124,7 @@ Prometheus and Grafana for application observability.
 | Web Server | Nginx |
 | Metrics | Prometheus, prometheus-client |
 | Observability | Grafana, PromQL |
+| Logging | Python logging, ContextVar, JSON, Nginx |
 | CI | GitHub Actions |
 | Deployment | Bash, Python, rsync, flock |
 | Operating System | Ubuntu Server |
@@ -239,6 +245,10 @@ LabManager/
 │   ├── redis_client.py
 │   ├── metrics.py
 │   ├── monitoring.py
+│   ├── logging_config.py
+│   ├── request_logging.py
+│   ├── uvicorn_logging.py
+│   ├── uvicorn_log_config.json
 │   ├── database.py
 │   ├── models.py
 │   └── schemas/
@@ -255,7 +265,8 @@ LabManager/
 ├── deploy/
 │   ├── nginx/
 │   │   ├── labmanager.conf
-│   │   └── labmanager-rate-limit.conf
+│   │   ├── labmanager-rate-limit.conf
+│   │   └── labmanager-logging.conf
 │   ├── grafana/
 │   │   └── labmanager-dashboard.json
 │   ├── redis/
@@ -575,10 +586,10 @@ direct backend tunnel rather than the Nginx API prefix.
 
 | Test suite | Passing tests | Measured coverage |
 |---|---:|---:|
-| Backend | 184 | 100% |
+| Backend | 229 | 100% |
 | Redis integration | 16 | Not measured separately |
 | Frontend | 212 | 100% |
-| Total | 412 | |
+| Total | 457 | |
 
 These results describe the latest verified local test runs.
 
@@ -716,6 +727,8 @@ Production characteristics:
 - Test source files excluded
 - Localhost-only published API port
 - Automatic container restart policy
+- Structured JSON API logging
+- Docker log rotation with 10 MB files and 3 retained files
 - External PostgreSQL network integration
 - Internal Docker network for Redis communication
 - Redis image pinned by SHA-256 digest
@@ -767,6 +780,7 @@ sudo rsync -a \
 
 ```bash
 sudo install -m 644 deploy/nginx/labmanager-rate-limit.conf /etc/nginx/conf.d/labmanager-rate-limit.conf
+sudo install -m 644 deploy/nginx/labmanager-logging.conf /etc/nginx/conf.d/labmanager-logging.conf
 
 sudo install -m 644 \
     deploy/nginx/labmanager.conf \
@@ -1124,6 +1138,207 @@ Replace user and server with your SSH connection details.
 - Automated alerting and comprehensive load testing
   are not implemented.
 
+## Structured Logging and Request Correlation
+
+LabManager provides structured JSON logging across FastAPI,
+Uvicorn, and the Nginx reverse proxy.
+
+### Logging Architecture
+
+```mermaid
+flowchart TD
+    Client[HTTP Client] --> Nginx[Nginx Reverse Proxy]
+    Nginx -->|X-Request-ID| API[FastAPI Application]
+    API --> BackendLogs[Structured Application Logs]
+    Nginx --> AccessLogs[Structured Nginx Access Logs]
+    API -->|Response| Nginx
+    Nginx -->|X-Request-ID| Client
+```
+
+Nginx generates a unique request identifier and replaces
+client-supplied request identifiers before forwarding requests
+to the backend.
+
+The backend preserves valid 32-character lowercase hexadecimal
+request identifiers and generates a new identifier when an
+incoming identifier is missing, duplicated, or invalid.
+
+Request context is maintained using Python ContextVar to
+isolate concurrent requests.
+
+The same identifier is included in the HTTP response,
+Nginx access log, and application request log.
+
+### Backend JSON Logging
+
+Application logs include the following fields:
+
+| Field | Description |
+| --- | --- |
+| timestamp | UTC timestamp |
+| level | Logging severity |
+| logger | Logger name |
+| event | Event description |
+| request_id | Request correlation identifier |
+| method | Normalized HTTP method |
+| route | Route template or unmatched |
+| status_code | HTTP response status |
+| duration_ms | Request duration in milliseconds |
+| error_type | Exception class when applicable |
+
+Example request log:
+
+```json
+{
+  "timestamp": "2026-11-27T20:33:40.726072+00:00",
+  "level": "INFO",
+  "logger": "labmanager",
+  "event": "request_completed",
+  "request_id": "205bbcfb40e2407eb44394cb05ab4256",
+  "method": "GET",
+  "route": "/health",
+  "status_code": 200,
+  "duration_ms": 0.494
+}
+```
+
+Successful GET requests to the metrics endpoint are excluded
+from application request completion logs to reduce monitoring
+noise. Failed metrics requests remain visible.
+
+Uvicorn access logging is disabled to avoid duplicate request
+logs and unnecessary exposure of raw request URLs.
+
+Uvicorn exception records are formatted without raw exception
+messages or traceback details.
+
+### Nginx JSON Access Logging
+
+The Nginx configuration uses a dedicated JSON access log format.
+
+Configuration files:
+
+- deploy/nginx/labmanager.conf
+- deploy/nginx/labmanager-logging.conf
+- deploy/nginx/labmanager-rate-limit.conf
+
+Nginx access logs include request identifiers, HTTP methods,
+response status codes, upstream status, request duration,
+upstream response duration, and response size.
+
+Unknown HTTP methods are normalized to OTHER.
+Status values outside the 100-599 range are normalized to 0.
+
+Nginx duration values are measured in seconds, while backend
+request durations are measured in milliseconds.
+
+Requests rejected by Nginx rate limiting retain their request
+identifiers and security headers. An empty upstream status
+indicates that no upstream response was recorded.
+
+### Logging Privacy
+
+Application request completion logs use route templates
+instead of raw request paths.
+
+The configured request log formats do not intentionally
+include:
+
+- Authorization headers
+- JWT access tokens
+- Passwords
+- Cookies
+- Request bodies
+- Query strings
+- Raw exception messages
+
+Unhandled application exceptions produce generic HTTP 500
+responses and structured error events.
+
+These protections apply to the configured logging paths.
+They do not constitute comprehensive sensitive data redaction
+for every possible logger or infrastructure component.
+
+### Log Rotation and Retention
+
+The API container uses Docker json-file logging with:
+
+| Setting | Value |
+| --- | --- |
+| max-size | 10m |
+| max-file | 3 |
+
+This limits retained API container logs to approximately
+30 MB, subject to individual log record size.
+
+The production Ubuntu Nginx installation uses daily log
+rotation with 14 retained rotations and compression.
+
+Nginx rotation is managed by the host operating system.
+Daily rotation does not impose a strict maximum disk usage.
+
+### Inspecting Logs
+
+Inspect recent application logs:
+
+```bash
+sudo docker logs --since 10m labmanager-api
+```
+
+Inspect recent Nginx access logs:
+
+```bash
+sudo tail -n 20 /var/log/nginx/labmanager-access.log
+```
+
+Check the active Docker logging configuration:
+
+```bash
+sudo docker inspect labmanager-api --format '{{json .HostConfig.LogConfig}}'
+```
+
+Use the X-Request-ID response header to correlate records
+between Nginx and FastAPI.
+
+### Logging Verification
+
+The structured logging implementation was verified through:
+
+- JSON formatter unit tests
+- Request middleware tests
+- Concurrent request context isolation tests
+- Request identifier validation tests
+- FastAPI integration tests
+- Uvicorn exception formatting tests
+- Isolated Nginx HTTP tests
+- End-to-end reverse proxy correlation tests
+- Nginx HTTP 429 logging tests
+- Production request correlation checks
+- Production security regression checks
+- Prometheus and Grafana availability checks
+
+The latest verified automated test results include 229 backend
+tests, 16 Redis integration tests, and 212 frontend tests.
+
+### Logging Limitations
+
+- Nginx error logs may contain raw URLs or query strings.
+- Third-party loggers are not universally sanitized.
+- Direct backend callers can supply valid request identifiers.
+  Nginx replaces these identifiers at the proxy boundary.
+- Request identifiers are correlation metadata, not
+  authentication credentials.
+- Uvicorn exception logs may not retain request context after
+  the application middleware resets it.
+- Historical Nginx access logs may contain non-JSON records
+  created before the logging deployment.
+- Docker log retention is local to the container.
+- Centralized log aggregation is not yet implemented.
+- Deployment rollback has not been exercised end to end.
+- The status 000 fallback has not been directly reproduced.
+- Container recreation may remove previous container logs.
+- Full test coverage does not guarantee absence of defects.
+
 ## Security
 
 ### Application Security
@@ -1402,6 +1617,69 @@ The backup files and previous API image were verified
 during deployment, but a complete observability rollback
 has not been executed against the live environment.
 
+### Structured Logging Deployment Rollback
+
+Before deploying structured logging, preserve:
+
+- The previous production API image.
+- The previous Docker Compose configuration.
+- The active Nginx site configuration.
+- The active Nginx rate limiting configuration.
+- Any existing Nginx logging configuration.
+
+The verified production deployment uses a protected backup
+directory under /var/backups/labmanager/logging/.
+
+#### Restore the Previous Nginx Configuration
+
+Set BACKUP_DIR to the actual pre-logging backup directory.
+
+```bash
+sudo install -m 644 "$BACKUP_DIR/labmanager.conf" /etc/nginx/sites-available/labmanager
+sudo rm -f /etc/nginx/conf.d/labmanager-logging.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Removing the logging configuration is appropriate only when
+it did not exist before the deployment. Otherwise, restore
+the previous logging configuration from its backup.
+
+#### Restore the Previous API Image
+
+The previous production image was preserved with the
+labmanager-api:before-structured-logging tag.
+
+Verify that the backup image and Compose configuration exist
+before proceeding.
+
+```bash
+sudo docker image inspect labmanager-api:before-structured-logging --format '{{.Id}}'
+
+sudo docker tag labmanager-api:before-structured-logging labmanager-api:latest
+
+sudo docker compose -p labmanager --project-directory /opt/projects/labmanager -f "$BACKUP_DIR/compose.yaml" up -d --no-deps --no-build --force-recreate api
+```
+
+#### Post-Rollback Verification
+
+```bash
+sudo nginx -t
+systemctl is-active nginx
+curl -fsS http://127.0.0.1:8001/health
+curl -fsS http://127.0.0.1/api/health
+sudo docker ps --filter name=labmanager
+```
+
+Also verify authentication, frontend availability, Redis
+connectivity, and Prometheus target health.
+
+This rollback does not require a database migration because
+the structured logging release introduces no schema changes.
+
+The rollback procedure has not been executed end to end.
+Container recreation may remove historical container logs.
+Preserve required logs separately before rollback.
+
 ## Roadmap
 
 - [x] Backend REST API
@@ -1436,7 +1714,11 @@ has not been executed against the live environment.
 - [x] Live HTTP and rate limiting metrics verification
 - [ ] Automated monitoring alerts and notifications
 - [ ] Performance and load testing
-- [ ] Structured logging and request correlation
+- [x] Structured logging and request correlation
+- [x] Structured Nginx access logging
+- [x] Docker API log rotation
+- [x] Production request correlation verification
+- [ ] Centralized log aggregation
 - [ ] Automated browser end-to-end tests
 - [ ] Deployment retention policies
 - [ ] Continuous delivery pipeline

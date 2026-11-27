@@ -5,6 +5,11 @@ services:
       target: production
     container_name: labmanager-api
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "127.0.0.1:8001:8000"
     environment:
