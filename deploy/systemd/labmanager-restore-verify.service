@@ -1,0 +1,21 @@
+[Unit]
+Description=LabManager PostgreSQL Backup Restore Verification
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/local/sbin/labmanager-verify-database-backup
+TimeoutStartSec=15min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/backups/labmanager/database /var/lib/labmanager/metrics
+ExecStopPost=/usr/local/sbin/labmanager-collect-backup-metrics restore
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=labmanager-restore-verify
