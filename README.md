@@ -104,6 +104,19 @@ Prometheus and Grafana for application observability.
 - HTTP method and status normalization
 - Docker API log rotation
 
+### Database Backup and Recovery
+
+- Automated daily PostgreSQL logical backups
+- Compressed custom-format backup archives
+- SHA256 backup integrity verification
+- Atomic backup publication
+- 30-day backup retention policy
+- Weekly isolated database restore verification
+- Shared locking for concurrent backup operations
+- Persistent Systemd timers
+- Prometheus backup and recovery metrics
+- Dedicated Grafana dashboard with nine panels
+
 ## Technology Stack
 
 | Layer | Technologies |
@@ -1339,6 +1352,399 @@ tests, 16 Redis integration tests, and 212 frontend tests.
 - Container recreation may remove previous container logs.
 - Full test coverage does not guarantee absence of defects.
 
+## Database Backup and Recovery
+
+LabManager provides automated PostgreSQL logical backups
+and isolated restore verification independently of the
+application API and frontend.
+
+### Backup Architecture
+
+```mermaid
+flowchart TD
+    A[Daily Systemd Timer] --> B[Backup Service]
+    B --> C[PostgreSQL pg_dump]
+    C --> D[Archive Validation and SHA256]
+    D --> E[Local Backup Storage]
+    E --> F[30-Day Retention]
+    G[Weekly Systemd Timer] --> H[Restore Verification]
+    E --> H
+    H --> I[Isolated PostgreSQL Container]
+    I --> J[Data Integrity Checks]
+    J --> K[Container Cleanup]
+    B --> L[Metrics Collector]
+    H --> L
+    L --> M[Node Exporter]
+    M --> N[Prometheus]
+    N --> O[Grafana]
+```
+
+### Backup Schedule
+
+| Operation | Schedule |
+| --- | --- |
+| Database backup | Daily at 03:00 |
+| Restore verification | Sunday at 04:00 |
+| Backup retention | 30 days |
+| Service startup timeout | 15 minutes |
+| Shared lock wait timeout | 120 seconds |
+
+Schedules use the Europe/Istanbul timezone.
+
+Persistent Systemd timers allow missed calendar events
+to be triggered after the timer becomes active again.
+
+### Backup Storage
+
+Backups are stored under:
+
+```text
+/var/backups/labmanager/database/
+    .backup.lock
+    labmanager-YYYYMMDDTHHMMSSZ/
+        database.dump
+        archive-list.txt
+        SHA256SUMS
+```
+
+Backup directory names use UTC timestamps.
+
+Each backup contains a compressed PostgreSQL custom-format
+archive, an archive table-of-contents listing, and a SHA256
+checksum manifest.
+
+The backup script creates files in a temporary directory,
+validates the archive listing, verifies the checksum, and
+publishes the completed backup using a directory rename.
+
+Retention runs only after a new backup has been published.
+Unrelated directories and incomplete backup candidates
+are excluded from normal retention cleanup.
+
+Backup and restore operations share an exclusive file lock
+to prevent concurrent execution.
+
+### Restore Verification
+
+The restore verification script selects the latest backup
+and validates its checksum before restoring it.
+
+The restore environment uses the same PostgreSQL image
+as the production database container.
+
+Isolation and resource controls include:
+
+- No Docker network connectivity
+- No published network ports
+- Temporary database storage using tmpfs
+- 256 MiB temporary storage limit
+- 512 MiB container memory limit
+- One CPU allocation
+- A separate verification database
+- Automatic cleanup on normal exit and handled errors
+
+The archive is restored using a single transaction with
+exit-on-error enabled.
+
+Verification includes:
+
+- Required application tables
+- Table record counts
+- Alembic migration metadata
+- Foreign key orphan detection
+- Unvalidated constraint detection
+
+Production database contents are not modified by the
+restore verification process.
+
+### Backup Infrastructure Installation
+
+The scripts target a Linux host with Systemd, Docker,
+Python 3, Bash, flock, and standard core utilities.
+
+The production PostgreSQL container is expected to be
+named postgres-db, with database labmanager and database
+user labmanager_user.
+
+Review these deployment assumptions before installation.
+
+Run the following commands from the repository root.
+
+```bash
+sudo install -d -o root -g root -m 700 /var/backups/labmanager/database
+sudo install -d -o root -g root -m 755 /var/lib/labmanager/metrics
+
+sudo install -o root -g root -m 750 deploy/scripts/backup-database.sh /usr/local/sbin/labmanager-backup-database
+
+sudo install -o root -g root -m 750 deploy/scripts/verify-database-backup.sh /usr/local/sbin/labmanager-verify-database-backup
+
+sudo install -o root -g root -m 750 deploy/scripts/write-backup-metrics.py /usr/local/sbin/labmanager-write-backup-metrics
+
+sudo install -o root -g root -m 750 deploy/scripts/collect-backup-metrics.sh /usr/local/sbin/labmanager-collect-backup-metrics
+
+sudo install -o root -g root -m 644 deploy/systemd/labmanager-backup.service /etc/systemd/system/
+sudo install -o root -g root -m 644 deploy/systemd/labmanager-backup.timer /etc/systemd/system/
+sudo install -o root -g root -m 644 deploy/systemd/labmanager-restore-verify.service /etc/systemd/system/
+sudo install -o root -g root -m 644 deploy/systemd/labmanager-restore-verify.timer /etc/systemd/system/
+
+sudo systemctl daemon-reload
+
+sudo systemd-analyze verify /etc/systemd/system/labmanager-backup.service /etc/systemd/system/labmanager-restore-verify.service
+
+sudo systemctl start labmanager-backup.service
+sudo systemctl start labmanager-restore-verify.service
+
+sudo systemctl enable --now labmanager-backup.timer labmanager-restore-verify.timer
+```
+
+The root-owned installed scripts are separated from the
+developer-writable repository directory.
+
+### Manual Backup and Restore Operations
+
+Trigger a database backup:
+
+```bash
+sudo systemctl start labmanager-backup.service
+```
+
+Verify the latest backup:
+
+```bash
+sudo systemctl start labmanager-restore-verify.service
+```
+
+Inspect timer schedules:
+
+```bash
+systemctl list-timers 'labmanager-*' --no-pager
+```
+
+Inspect service logs:
+
+```bash
+sudo journalctl -u labmanager-backup.service --no-pager -n 100
+sudo journalctl -u labmanager-restore-verify.service --no-pager -n 100
+```
+
+### Backup Security
+
+- Backup directories are owned by root with mode 700.
+- Backup archive files use mode 600.
+- Installed executable scripts use mode 750.
+- Systemd unit files use mode 644.
+- Backup and restore operations share an exclusive lock.
+- Systemd services use filesystem protection and
+  NoNewPrivileges.
+- Restore containers have no network connectivity.
+- Database contents are not exposed through metrics.
+- Metrics files are published atomically with mode 644.
+
+The restore container uses trust authentication only
+inside its isolated verification environment.
+
+Access to the Docker daemon remains highly privileged.
+Systemd hardening does not eliminate the privileges
+associated with Docker daemon access.
+
+### Backup and Recovery Metrics
+
+Systemd invokes the metrics collector through ExecStopPost
+after backup and restore operations.
+
+The collector uses the service result and monotonic
+execution timestamps to report status and duration.
+
+| Metric | Description |
+| --- | --- |
+| labmanager_backup_success | Latest backup result |
+| labmanager_backup_last_success_timestamp_seconds | Last successful backup timestamp |
+| labmanager_backup_duration_seconds | Backup execution duration |
+| labmanager_backup_count | Number of complete backup candidates |
+| labmanager_backup_size_bytes | Latest backup archive size |
+| labmanager_restore_success | Latest restore verification result |
+| labmanager_restore_last_success_timestamp_seconds | Last successful restore timestamp |
+| labmanager_restore_duration_seconds | Restore execution duration |
+
+Success metrics use 1 for success and 0 for failure.
+
+Failed operations preserve the previous successful
+operation timestamp. A zero timestamp indicates that
+no successful operation has been recorded.
+
+Metrics are published atomically to:
+
+```text
+/var/lib/labmanager/metrics/labmanager_backup.prom
+/var/lib/labmanager/metrics/labmanager_restore.prom
+```
+
+### Node Exporter Integration
+
+Add the following argument to the existing Node Exporter
+command configuration:
+
+```yaml
+- "--collector.textfile.directory=/textfile"
+```
+
+Add the following read-only volume:
+
+```yaml
+- /var/lib/labmanager/metrics:/textfile:ro
+```
+
+Preserve the existing Node Exporter configuration,
+including the host filesystem mount and rootfs argument.
+
+Recreate only the Node Exporter container when possible.
+
+The existing Prometheus Node Exporter scrape job
+collects the backup metrics without requiring
+a separate scrape target.
+
+### Grafana Backup Dashboard
+
+The version-controlled dashboard is available at:
+
+```text
+deploy/grafana/labmanager-backup-dashboard.json
+```
+
+Import the JSON file into Grafana and select the
+existing Prometheus datasource.
+
+The dashboard includes nine panels:
+
+- Backup status
+- Restore verification status
+- Total backups
+- Last successful backup
+- Last successful restore
+- Latest backup size
+- Backup duration
+- Restore duration
+- Textfile collector scrape errors
+
+The dashboard refreshes every 15 seconds and displays
+timestamps in UTC.
+
+### Verified Backup and Recovery Results
+
+The following results were verified in the self-hosted
+deployment on November 27-28, 2026.
+
+| Verification | Result |
+| --- | --- |
+| Manual database backup | Passed |
+| Independent SHA256 verification | Passed |
+| Full archive decoding | Passed |
+| Isolated PostgreSQL restore | Passed |
+| Restored table content comparison | Passed |
+| Constraint and index comparison | Passed |
+| Sequence comparison | Passed |
+| Retention policy checks | Passed |
+| Simulated partial backup failure | Passed |
+| Simulated corrupted backup | Passed |
+| Simulated restore failure and cleanup | Passed |
+| Shared lock behavior | Passed |
+| Isolated script test checks | 59 passed |
+| Systemd failure environment test | Passed |
+| Natural daily timer activation | Passed |
+| Prometheus backup and restore metrics | 8/8 |
+| Grafana panel query validation | 9/9 |
+| Node Exporter textfile scrape errors | 0 |
+| Production API health | Healthy |
+
+The isolated script checks were executed manually using
+temporary fixtures and controlled failure scenarios.
+
+They are separate from the automated application test
+suite and are not included in its test count.
+
+The first natural daily timer activation occurred at
+03:00:14 Europe/Istanbul on November 28, 2026.
+
+The resulting archive was independently checksum-verified
+and fully decoded.
+
+Six backup archives were present during verification.
+
+### Backup and Recovery Limitations
+
+- Backups are stored on the production host.
+  Disk failure or host loss can destroy both copies.
+- Off-site backups and backup encryption are not implemented.
+- Logical backups do not provide point-in-time recovery
+  or continuous WAL archiving.
+- PostgreSQL cluster-wide roles and global objects
+  are not included in the database-only dump.
+- SHA256 detects corruption but does not establish
+  authenticity against privileged tampering.
+- Archive listing validation is not a full restore test.
+- Weekly restore verification tests only the latest backup.
+- Restore verification does not constitute full application
+  or disaster recovery testing.
+- Fixed restore resource limits may require adjustment
+  as the database grows.
+- The restore role does not reproduce all production
+  database permission boundaries.
+- Abrupt termination may prevent cleanup or metric publication.
+- Backup metrics represent the latest reported operation.
+- Backup inventory metrics may become stale between runs.
+- Missing execution timestamps can produce zero duration.
+- Metrics publication failures may cause a service to
+  report failure even after successful archive creation.
+- Automated alerts and stale-metric detection are pending.
+- Failure paths were tested using isolated fixtures and
+  a separate Systemd test service.
+- The weekly timer has been tested manually, but its first
+  natural scheduled activation has not yet been observed.
+- Persistent timer behavior after a host reboot has not
+  been verified end to end.
+
+### Backup Deployment Rollback
+
+Disable future scheduled operations:
+
+```bash
+sudo systemctl disable --now labmanager-backup.timer labmanager-restore-verify.timer
+```
+
+Check that neither service is running:
+
+```bash
+systemctl status labmanager-backup.service labmanager-restore-verify.service --no-pager
+```
+
+Wait for active operations to finish before removing
+installed unit files.
+
+```bash
+sudo rm -f /etc/systemd/system/labmanager-backup.service
+sudo rm -f /etc/systemd/system/labmanager-backup.timer
+sudo rm -f /etc/systemd/system/labmanager-restore-verify.service
+sudo rm -f /etc/systemd/system/labmanager-restore-verify.timer
+
+sudo systemctl daemon-reload
+```
+
+Remove the added Node Exporter textfile collector
+argument and volume, or restore the previous monitoring
+stack configuration after reviewing its differences.
+
+Recreate Node Exporter without changing the Prometheus
+or Grafana configuration.
+
+The dedicated backup dashboard may be removed separately.
+
+Preserve all existing database backup archives.
+
+Disabling the backup infrastructure does not require
+deleting backup data or modifying the production database.
+
+This rollback procedure has not been executed end to end.
+
 ## Security
 
 ### Application Security
@@ -1706,7 +2112,7 @@ Preserve required logs separately before rollback.
 - [x] Nginx traffic protection
 - [x] Frontend rate limit and outage handling
 - [ ] PostgreSQL integration and concurrency tests
-- [ ] Automated database backups and restore verification
+- [x] Automated database backups and restore verification
 - [x] Application metrics and monitoring
 - [x] Authenticated Prometheus metrics endpoint
 - [x] Dedicated internal monitoring network
