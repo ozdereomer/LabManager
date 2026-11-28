@@ -25,3 +25,9 @@ dist-ssr
 
 # Test coverage
 coverage/
+
+# Playwright E2E artifacts
+playwright-report/
+test-results/
+playwright/.cache/
+playwright/.auth/

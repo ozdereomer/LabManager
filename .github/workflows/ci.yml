@@ -51,7 +51,7 @@ jobs:
   frontend:
     name: Frontend Tests and Build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     defaults:
       run:
@@ -79,3 +79,19 @@ jobs:
 
       - name: Build frontend
         run: npm run build
+
+      - name: Run Playwright E2E tests
+        working-directory: .
+        run: bash deploy/scripts/test-e2e-all.sh
+
+      - name: Upload Playwright reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-e2e-reports
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7
+          if-no-files-found: warn
+          include-hidden-files: true

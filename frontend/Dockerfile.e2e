@@ -1,0 +1,20 @@
+FROM mcr.microsoft.com/playwright:v1.65.1-noble@sha256:766137e2d9caad4744187e53cdc89320ba6f2eb57cff097374020944b44dd0a9
+
+WORKDIR /app
+
+ENV CI=true
+ENV LABMANAGER_E2E=1
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+COPY package.json package-lock.json ./
+
+RUN npm ci && \
+    npx playwright --version
+
+COPY --chown=pwuser:pwuser . .
+
+RUN chown pwuser:pwuser /app
+
+USER pwuser
+
+CMD ["npm", "run", "test:e2e"]
