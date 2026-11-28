@@ -11,7 +11,7 @@
 ![Redis](https://img.shields.io/badge/Redis-8-DC382D)
 ![Prometheus](https://img.shields.io/badge/Prometheus-Monitoring-E6522C)
 ![Grafana](https://img.shields.io/badge/Grafana-Observability-F46800)
-![Tests](https://img.shields.io/badge/Tests-492_passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-557_passing-brightgreen)
 
 ## Overview
 
@@ -132,6 +132,22 @@ Prometheus and Grafana for application observability.
 - Automatic test resource cleanup
 - PostgreSQL integration testing in GitHub Actions
 
+### Browser End-to-End Testing
+
+- 65 automated Playwright tests across nine specification files
+- Real Chromium browser execution
+- Dockerized browser and Vite test server
+- Isolated PostgreSQL, Redis, and FastAPI services
+- Dedicated internal Docker networks
+- No published test service ports
+- Non-root browser runner
+- Authentication and account management verification
+- Laboratory, equipment, and maintenance workflow verification
+- Dashboard and multi-user isolation verification
+- Global registration rate limit verification
+- Automatic resource cleanup and restricted report permissions
+- GitHub Actions integration and test report artifacts
+
 ## Technology Stack
 
 | Layer | Technologies |
@@ -147,6 +163,7 @@ Prometheus and Grafana for application observability.
 | Authentication | JWT, PyJWT, Argon2 |
 | Backend Testing | pytest, pytest-cov |
 | Frontend Testing | Vitest, React Testing Library |
+| Browser E2E Testing | Playwright, Chromium |
 | Code Quality | ESLint |
 | Containerization | Docker, Docker Compose |
 | Web Server | Nginx |
@@ -289,6 +306,21 @@ LabManager/
 │   │   └── utils/
 │   ├── package.json
 │   ├── package-lock.json
+│   ├── e2e/
+│   │   ├── helpers.js
+│   │   ├── smoke.spec.js
+│   │   ├── auth.spec.js
+│   │   ├── settings.spec.js
+│   │   ├── laboratories.spec.js
+│   │   ├── equipment.spec.js
+│   │   ├── maintenance.spec.js
+│   │   ├── dashboard.spec.js
+│   │   ├── isolation.spec.js
+│   │   └── registration-rate-limit.spec.js
+│   ├── Dockerfile.e2e
+│   ├── Dockerfile.e2e.dockerignore
+│   ├── playwright.config.js
+│   ├── vite.e2e.config.js
 │   └── vite.config.js
 ├── deploy/
 │   ├── nginx/
@@ -303,7 +335,9 @@ LabManager/
 │       ├── deploy-frontend.sh
 │       ├── setup-redis-acl.py
 │       ├── test-redis-integration.sh
-│       └── test-postgresql-integration.sh
+│       ├── test-postgresql-integration.sh
+│       ├── test-e2e.sh
+│       └── test-e2e-all.sh
 ├── migrations/
 │   └── versions/
 ├── tests/
@@ -620,7 +654,8 @@ direct backend tunnel rather than the Nginx API prefix.
 | Redis integration | 16 | Not measured separately |
 | PostgreSQL integration | 35 | Not measured separately |
 | Frontend | 212 | 100% |
-| Total | 492 | |
+| Playwright E2E | 65 | Not measured separately |
+| Total | 557 | |
 
 These results describe the latest verified local test runs.
 
@@ -894,7 +929,8 @@ CI job to fail.
 | Redis integration tests | 16 passed |
 | PostgreSQL integration tests | 35 passed |
 | Frontend tests | 212 passed |
-| Total automated tests | 492 passed |
+| Playwright E2E tests | 65 passed |
+| Total automated tests | 557 passed |
 | Backend measured coverage | 100% |
 | Frontend measured coverage | 100% |
 | Frontend ESLint | Passed |
@@ -917,8 +953,9 @@ throughout the integration test verification.
 
 - The PostgreSQL integration suite mocks the rate limiter.
   Real Redis behavior is verified by a separate test suite.
-- PostgreSQL and Redis are not exercised together in a
-  complete production-like integration environment.
+- The PostgreSQL integration suite does not exercise real
+  Redis behavior. The separate Playwright E2E suite exercises
+  PostgreSQL and Redis together with the FastAPI application.
 - The PostgreSQL integration suite runs without separate
   coverage measurement.
 - The database role has elevated privileges inside the
@@ -937,8 +974,8 @@ throughout the integration test verification.
   execution deadline.
 - Database performance, sustained load, replication,
   failover, and connection pool exhaustion are not tested.
-- Browser-based end-to-end testing remains a planned
-  improvement.
+- Browser-based workflows are verified separately by the
+  Playwright E2E suite.
 - Local verification does not establish successful execution
   on every GitHub Actions runner or deployment environment.
 
@@ -957,6 +994,246 @@ statements, branches, functions, and lines.
 
 The latest verified frontend run achieved 100% across all
 four configured coverage metrics.
+
+### Playwright End-to-End Tests
+
+LabManager includes 65 automated browser tests across nine
+Playwright specification files.
+
+The suite uses a real Chromium browser, a Vite test server,
+the FastAPI application, PostgreSQL, and Redis.
+
+Production services and production database records are
+not used by the E2E test environment.
+
+#### E2E Test Coverage
+
+| Specification | Tests |
+|---|---:|
+| Smoke | 4 |
+| Authentication | 7 |
+| Account settings | 12 |
+| Laboratories | 7 |
+| Equipment | 8 |
+| Maintenance | 10 |
+| Dashboard | 8 |
+| Multi-user isolation | 8 |
+| Global registration rate limit | 1 |
+| Total | 65 |
+
+The suite verifies:
+
+- User registration and authentication.
+- Protected routes and session expiration.
+- Email and password changes.
+- Token invalidation across independent sessions.
+- Laboratory, equipment, and maintenance CRUD workflows.
+- Form validation and cancellation.
+- Database persistence after browser reloads.
+- Dashboard statistics and maintenance cost calculations.
+- Cross-user access restrictions.
+- Authentication and registration rate limiting.
+
+#### E2E Architecture
+
+```text
+Dedicated internal Docker network
+|
++-- Playwright runner (non-root)
+|   +-- Chromium browser
+|   +-- Vite test server
+|
++-- FastAPI test application
+|
++-- PostgreSQL test database
+|
++-- Redis test service
+```
+
+Each execution creates uniquely named temporary resources.
+
+The browser communicates with the Vite test server,
+which proxies API requests to the isolated FastAPI service.
+
+The API uses dedicated PostgreSQL and Redis test services
+rather than existing production containers.
+
+The PostgreSQL and Redis images and the Playwright base
+image are pinned by image digest.
+
+#### Running All E2E Tests
+
+From the repository root:
+
+```bash
+sudo bash deploy/scripts/test-e2e-all.sh
+```
+
+The regression runner executes four independent groups:
+
+| Group | Scope | Tests |
+|---|---|---:|
+| 1 | Smoke, authentication, settings | 23 |
+| 2 | Laboratories, equipment, maintenance | 25 |
+| 3 | Dashboard and multi-user isolation | 16 |
+| 4 | Global registration rate limit | 1 |
+| Total | | 65 |
+
+Each group receives a fresh isolated environment.
+
+The global registration rate limit test runs separately
+to avoid interfering with other registration workflows.
+
+The runner stops when a test group fails.
+
+#### Running Individual E2E Tests
+
+Run the smoke tests:
+
+```bash
+sudo bash deploy/scripts/test-e2e.sh smoke.spec.js
+```
+
+Run multi-user isolation tests:
+
+```bash
+sudo bash deploy/scripts/test-e2e.sh isolation.spec.js
+```
+
+Run the dedicated registration rate limit test:
+
+```bash
+sudo LABMANAGER_E2E_RATE_LIMIT=1 bash deploy/scripts/test-e2e.sh registration-rate-limit.spec.js
+```
+
+The registration rate limit execution mode is validated
+before temporary resources are created.
+
+#### Test Environment Safety
+
+The E2E runner implements the following safeguards:
+
+- Unique container, network, and application image names.
+- Dedicated internal Docker network.
+- Temporary PostgreSQL storage using tmpfs.
+- Dedicated test database and test credentials.
+- Randomly generated test JWT signing secret.
+- Restricted Redis ACL configuration.
+- Alembic migration verification.
+- Database identity and initial empty-state verification.
+- Redis connectivity and rate limit verification.
+- Exact network identity checks for application services.
+- No published test service ports.
+- Non-privileged test containers.
+- Non-root Playwright runner configuration.
+- Browser runner configuration checks before startup.
+- No host resource mounts in the browser runner.
+
+The test infrastructure does not require production
+database credentials or production JWT secrets.
+
+Docker image preparation may require internet access
+before the isolated runtime environment is created.
+
+#### Resource Cleanup and Reports
+
+Temporary test containers, networks, application image
+tags, and temporary configuration files are removed
+during normal completion and handled failures.
+
+Playwright reports are exported before container cleanup.
+
+Report directories:
+
+```text
+frontend/playwright-report/<run-id>/
+frontend/test-results/<run-id>/
+```
+
+Each execution uses a separate report directory.
+
+Local report directories use permission mode 700,
+and report files use permission mode 600.
+
+When executed through sudo, report ownership is restored
+to the invoking user.
+
+Reports may contain test credentials, test session data,
+screenshots, and browser traces. They must be treated
+as sensitive test artifacts.
+
+Generated reports are excluded from version control.
+
+#### GitHub Actions Integration
+
+The existing Frontend Tests and Build job is configured
+to execute all four E2E test groups after the frontend
+coverage, ESLint, and production build checks.
+
+The job has a 25-minute timeout.
+
+Available Playwright reports are uploaded even when
+an earlier test step fails.
+
+CI report artifacts have a seven-day retention period.
+
+The existing required CI job names are preserved.
+
+#### Verified Local Results
+
+The latest local regression completed successfully:
+
+| Verification | Result |
+|---|---|
+| Playwright E2E tests | 65 passed |
+| E2E specification files | 9 |
+| Independent E2E groups | 4 passed |
+| Standard backend tests | 229 passed |
+| Redis integration tests | 16 passed |
+| PostgreSQL integration tests | 35 passed |
+| Frontend tests | 212 passed |
+| Total automated tests | 557 passed |
+| Backend measured coverage | 100% |
+| Frontend measured coverage | 100% |
+| ESLint | Passed |
+| Frontend production build | Passed |
+| npm audit | 0 reported vulnerabilities |
+| Temporary test containers remaining | 0 |
+| Temporary test networks remaining | 0 |
+| Production API health | Healthy |
+| Nginx API health | Healthy |
+| Nginx configuration | Valid |
+
+A controlled no-tests-found failure was also verified
+to exercise report export and resource cleanup.
+
+Production services remained running throughout the
+local E2E regression and infrastructure verification.
+
+#### E2E Testing Limitations
+
+- Browser coverage is currently limited to Chromium.
+- Tests execute serially with one Playwright worker.
+- Firefox, WebKit, and mobile browser behavior are not verified.
+- E2E tests do not contribute to measured source code coverage.
+- Some test fixtures are created through API requests.
+- The Vite test proxy does not reproduce the complete
+  production Nginx deployment.
+- Production database permissions are not verified.
+- Network and container configuration checks do not
+  constitute a complete container security audit.
+- The browser runner uses the Node.js version supplied
+  by its Playwright image, which may differ from the
+  frontend development and CI Node.js version.
+- The regression runner contains fixed test group counts
+  that must be maintained when specifications change.
+- Local report retention is not automatically enforced.
+- Forced termination, host failure, or power loss may
+  require manual resource cleanup.
+- Performance, sustained load, and accessibility testing
+  are outside the current E2E suite.
+- Successful local execution does not guarantee successful
+  execution on every CI runner or deployment environment.
 
 ### Test Scope
 
@@ -1003,6 +1280,15 @@ pushes to the main branch.
 - Enforce coverage requirements
 - Run ESLint
 - Build production assets
+- Execute all four isolated Playwright E2E test groups
+- Export available Playwright reports even after test failures
+- Retain CI report artifacts for seven days
+
+The frontend job has a 25-minute timeout to accommodate
+Docker image preparation and browser test execution.
+
+The existing Backend Tests and Frontend Tests and Build
+job names are preserved for branch protection compatibility.
 
 The current pipeline provides continuous integration.
 Production deployment is manually initiated and is not
@@ -1613,7 +1899,8 @@ The structured logging implementation was verified through:
 
 The latest verified automated test results include 229 backend
 tests, 16 Redis integration tests, 35 PostgreSQL integration
-tests, and 212 frontend tests.
+tests, 212 frontend tests, and 65 Playwright E2E tests,
+for a total of 557 passing automated tests.
 
 ### Logging Limitations
 
@@ -2407,7 +2694,7 @@ Preserve required logs separately before rollback.
 - [x] Docker API log rotation
 - [x] Production request correlation verification
 - [ ] Centralized log aggregation
-- [ ] Automated browser end-to-end tests
+- [x] Automated browser end-to-end tests
 - [ ] Deployment retention policies
 - [ ] Continuous delivery pipeline
 - [ ] Role-based access control
