@@ -45,6 +45,9 @@ jobs:
       - name: Run Redis integration tests
         run: bash deploy/scripts/test-redis-integration.sh
 
+      - name: Run PostgreSQL integration tests
+        run: bash deploy/scripts/test-postgresql-integration.sh
+
   frontend:
     name: Frontend Tests and Build
     runs-on: ubuntu-latest

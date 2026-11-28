@@ -11,7 +11,7 @@
 ![Redis](https://img.shields.io/badge/Redis-8-DC382D)
 ![Prometheus](https://img.shields.io/badge/Prometheus-Monitoring-E6522C)
 ![Grafana](https://img.shields.io/badge/Grafana-Observability-F46800)
-![Tests](https://img.shields.io/badge/Tests-457_passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-492_passing-brightgreen)
 
 ## Overview
 
@@ -116,6 +116,21 @@ Prometheus and Grafana for application observability.
 - Persistent Systemd timers
 - Prometheus backup and recovery metrics
 - Dedicated Grafana dashboard with nine panels
+
+### PostgreSQL Integration and Concurrency Testing
+
+- Dedicated PostgreSQL 17.11 integration test environment
+- Digest-pinned PostgreSQL Docker image
+- Isolated internal Docker network
+- Temporary database storage using tmpfs
+- Alembic migration verification against PostgreSQL
+- Database constraint and transaction verification
+- Real PostgreSQL authentication and CRUD integration tests
+- Multi-user database isolation verification
+- Concurrent registration and equipment creation tests
+- Concurrent account credential update tests
+- Automatic test resource cleanup
+- PostgreSQL integration testing in GitHub Actions
 
 ## Technology Stack
 
@@ -287,10 +302,12 @@ LabManager/
 │   └── scripts/
 │       ├── deploy-frontend.sh
 │       ├── setup-redis-acl.py
-│       └── test-redis-integration.sh
+│       ├── test-redis-integration.sh
+│       └── test-postgresql-integration.sh
 ├── migrations/
 │   └── versions/
 ├── tests/
+│   └── test_postgresql_integration.py
 ├── .env.example
 ├── .dockerignore
 ├── .gitignore
@@ -601,8 +618,9 @@ direct backend tunnel rather than the Nginx API prefix.
 |---|---:|---:|
 | Backend | 229 | 100% |
 | Redis integration | 16 | Not measured separately |
+| PostgreSQL integration | 35 | Not measured separately |
 | Frontend | 212 | 100% |
-| Total | 457 | |
+| Total | 492 | |
 
 These results describe the latest verified local test runs.
 
@@ -633,7 +651,8 @@ Production database records are not used by this test suite.
 The backend coverage threshold is configured at 100%.
 
 The standard backend suite mocks the rate limiting service
-and skips the 16 opt-in Redis integration tests.
+and skips the 16 opt-in Redis integration tests and
+35 opt-in PostgreSQL integration tests.
 
 ### Redis Integration Tests
 
@@ -665,8 +684,263 @@ handled failures. Forced termination or host failure may
 require manual cleanup.
 
 Integration tests run separately without coverage measurement.
-PostgreSQL integration and concurrency testing remain planned
-improvements.
+### PostgreSQL Integration Tests
+
+The PostgreSQL integration suite complements the standard
+SQLite-based backend tests by exercising the application
+against a real PostgreSQL database.
+
+The suite contains 35 passing test cases across 33 test
+functions, including parameterized concurrency scenarios.
+
+#### Running PostgreSQL Integration Tests
+
+From the repository root:
+
+```bash
+sudo bash deploy/scripts/test-postgresql-integration.sh
+```
+
+The runner requires Docker access and sufficient resources
+to build the dedicated application test image.
+
+Production environment variables, database credentials,
+and existing database records are not required.
+
+#### Test Architecture
+
+```mermaid
+flowchart TD
+    A[PostgreSQL Integration Runner] --> B[Application Test Image]
+    A --> C[Internal Docker Network]
+    A --> D[Temporary PostgreSQL 17.11]
+    C --- D
+    B --> E[Temporary Test Container]
+    C --- E
+    E --> F[Environment Safety Validation]
+    F --> G[Alembic Upgrade to Head]
+    G --> H[PostgreSQL Integration Tests]
+    H --> I[Automatic Resource Cleanup]
+    D --> J[Temporary Database Storage]
+```
+
+The runner creates:
+
+- A dedicated application test image using the Dockerfile
+  test target.
+- A uniquely named internal Docker network.
+- A temporary PostgreSQL 17.11 container.
+- A temporary application test container.
+- A dedicated test database and database role.
+
+The PostgreSQL image is pinned to an immutable image digest
+to prevent unexpected changes to the database image.
+
+The database container uses a 512 MiB memory limit,
+one CPU, and a 256 MiB tmpfs database storage mount.
+
+No database ports are published to the host.
+
+#### Database Safety and Isolation
+
+PostgreSQL integration tests are opt-in and require
+RUN_POSTGRESQL_INTEGRATION=1.
+
+Before migrations or destructive test operations, the
+session fixture validates:
+
+- The exact dedicated PostgreSQL test connection URL.
+- The expected SQLite default application database URL.
+- The absence of Redis integration mode.
+- The connected PostgreSQL database name.
+- The connected PostgreSQL database role.
+- The PostgreSQL 17 major version.
+- An initially empty public database schema.
+
+The application database dependency is overridden to use
+independent sessions connected to the temporary database.
+
+Alembic receives the dedicated PostgreSQL connection URL
+in a separate subprocess.
+
+The production application configuration is not modified.
+
+Before and after each test, application tables are truncated
+and identity sequences are reset. These operations are
+restricted to the validated integration test environment.
+
+The database connection uses a five-second connection
+timeout, a fifteen-second statement timeout, and a
+ten-second lock timeout.
+
+The migration subprocess has a separate sixty-second timeout.
+
+The test credentials are intentionally dedicated to the
+temporary environment and must not be used in production.
+
+#### Database and Migration Verification
+
+The suite verifies:
+
+- PostgreSQL connectivity and database identity.
+- Successful Alembic migration to the expected revision.
+- Expected database tables after migration.
+- API health endpoint availability.
+- Unique email and equipment serial number constraints.
+- Laboratory, equipment, and maintenance foreign keys.
+- Restricted deletion of referenced parent records.
+- Transaction rollback and atomicity.
+- Transaction visibility across independent sessions.
+- Database-side token version defaults.
+- Exact decimal precision for maintenance costs.
+
+Database constraint tests inspect PostgreSQL SQLSTATE
+values, including 23505 for unique violations and
+23503 for foreign key violations.
+
+The migration test validates the expected Alembic head
+revision and must be updated when new migrations are added.
+
+#### Application Integration Verification
+
+The suite exercises the FastAPI application through its
+HTTP test client using real PostgreSQL persistence.
+
+Authentication and account management coverage includes:
+
+- User registration and login.
+- Duplicate email rejection.
+- Invalid credential rejection.
+- Email updates and token invalidation.
+- Password updates and token invalidation.
+
+Laboratory, equipment, and maintenance coverage includes:
+
+- Create, read, update, and delete operations.
+- Persistence verification through independent sessions.
+- Duplicate equipment serial number rejection.
+- Protected parent record deletion.
+- Multi-user data isolation.
+- Cross-user relationship protection.
+- Global equipment serial number uniqueness.
+- Filtering, sorting, and pagination.
+- User-specific dashboard aggregation.
+
+#### Concurrency Verification
+
+Concurrency tests use independent requests executed
+through a thread pool.
+
+SQLAlchemy execution events and synchronization barriers
+coordinate competing database operations without relying
+on arbitrary sleep-based delays.
+
+The suite verifies five concurrent scenarios:
+
+| Scenario | Expected outcome |
+|---|---|
+| Duplicate user registration | One HTTP 201 and one HTTP 409 |
+| Duplicate equipment creation | One HTTP 201 and one HTTP 409 |
+| Concurrent email updates | One HTTP 200 and one HTTP 401 |
+| Concurrent password updates | One HTTP 200 and one HTTP 401 |
+| Concurrent email and password updates | One HTTP 200 and one HTTP 401 |
+
+Registration and equipment tests verify that database
+uniqueness constraints prevent duplicate records.
+
+Account update tests exercise PostgreSQL row locking
+through SELECT FOR UPDATE and verify that only one
+credential update succeeds for the original token version.
+
+The tests also verify persisted account state, token
+version increments, invalidation of previous tokens,
+and authentication using the successful credentials.
+
+#### Resource Cleanup
+
+The runner uses shell cleanup handlers to remove:
+
+- The temporary application test container.
+- The temporary PostgreSQL container.
+- The dedicated Docker network.
+- The temporary application test image tag.
+
+Cleanup is attempted after successful execution and
+handled failures.
+
+Forced termination, Docker daemon failures, or host
+failures may require manual resource cleanup.
+
+The pinned PostgreSQL base image may remain cached
+for subsequent test runs.
+
+#### Continuous Integration
+
+The PostgreSQL integration runner is included in the
+existing Backend Tests job in GitHub Actions.
+
+The backend pipeline executes the standard coverage suite,
+isolated Redis integration tests, and isolated PostgreSQL
+integration tests.
+
+A PostgreSQL integration test failure causes the backend
+CI job to fail.
+
+#### Verified Local Results
+
+| Verification | Result |
+|---|---|
+| Standard backend tests | 229 passed |
+| Redis integration tests | 16 passed |
+| PostgreSQL integration tests | 35 passed |
+| Frontend tests | 212 passed |
+| Total automated tests | 492 passed |
+| Backend measured coverage | 100% |
+| Frontend measured coverage | 100% |
+| Frontend ESLint | Passed |
+| Frontend production build | Passed |
+| npm audit | 0 reported vulnerabilities |
+| Temporary test containers remaining | 0 |
+| Temporary test networks remaining | 0 |
+| Temporary application test image tags remaining | 0 |
+| Production API health checks | Passed |
+| Nginx configuration validation | Passed |
+
+The PostgreSQL suite completed its final local regression
+run in 5.15 seconds, excluding Docker image build,
+database startup, and resource cleanup time.
+
+The existing production services remained running
+throughout the integration test verification.
+
+#### PostgreSQL Integration Testing Limitations
+
+- The PostgreSQL integration suite mocks the rate limiter.
+  Real Redis behavior is verified by a separate test suite.
+- PostgreSQL and Redis are not exercised together in a
+  complete production-like integration environment.
+- The PostgreSQL integration suite runs without separate
+  coverage measurement.
+- The database role has elevated privileges inside the
+  temporary database container. Production database role
+  permissions are not verified by this suite.
+- Migrations are tested against an initially empty database,
+  not every possible historical production database state.
+- The health endpoint test does not independently establish
+  database readiness.
+- Concurrency tests cover selected conflicting operations,
+  not every possible transaction interleaving.
+- Concurrent parent deletion and child creation races are
+  not covered by the current suite.
+- Synchronization and database timeouts reduce the risk
+  of hanging tests but do not guarantee a strict overall
+  execution deadline.
+- Database performance, sustained load, replication,
+  failover, and connection pool exhaustion are not tested.
+- Browser-based end-to-end testing remains a planned
+  improvement.
+- Local verification does not establish successful execution
+  on every GitHub Actions runner or deployment environment.
 
 ### Frontend Tests
 
@@ -697,6 +971,11 @@ four configured coverage metrics.
 - Protected routes
 - Dashboard behavior
 - Redis rate limiting and concurrent requests
+- PostgreSQL migrations and database constraints
+- PostgreSQL transactions and rollback behavior
+- PostgreSQL numeric precision and transaction visibility
+- Real PostgreSQL API persistence and user isolation
+- Concurrent database writes and account updates
 - Authentication service failure handling
 - Frontend HTTP 429 and HTTP 503 error handling
 
@@ -713,6 +992,8 @@ pushes to the main branch.
 - Enforce coverage requirements
 - Build an isolated Redis integration test environment
 - Execute Redis integration tests
+- Build an isolated PostgreSQL integration test environment
+- Execute PostgreSQL integration and concurrency tests
 - Clean up temporary integration test resources
 
 ### Frontend Pipeline
@@ -1331,7 +1612,8 @@ The structured logging implementation was verified through:
 - Prometheus and Grafana availability checks
 
 The latest verified automated test results include 229 backend
-tests, 16 Redis integration tests, and 212 frontend tests.
+tests, 16 Redis integration tests, 35 PostgreSQL integration
+tests, and 212 frontend tests.
 
 ### Logging Limitations
 
@@ -2111,7 +2393,7 @@ Preserve required logs separately before rollback.
 - [x] Isolated Redis integration testing
 - [x] Nginx traffic protection
 - [x] Frontend rate limit and outage handling
-- [ ] PostgreSQL integration and concurrency tests
+- [x] PostgreSQL integration and concurrency tests
 - [x] Automated database backups and restore verification
 - [x] Application metrics and monitoring
 - [x] Authenticated Prometheus metrics endpoint
