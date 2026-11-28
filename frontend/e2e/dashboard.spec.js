@@ -75,12 +75,16 @@ async function createMaintenance(
 }
 
 async function openDashboard(page) {
-  const [response] = await Promise.all([
-    waitForApiResponse(page, '/dashboard', 'GET'),
+  await page.goto('about:blank')
+
+  const [dashboard] = await Promise.all([
+    waitForApiResponse(page, '/dashboard', 'GET')
+      .then(async response => {
+        expect(response.status()).toBe(200)
+        return response.json()
+      }),
     page.goto('/'),
   ])
-
-  expect(response.status()).toBe(200)
 
   await expect(
     page.getByRole('heading', {
@@ -89,7 +93,7 @@ async function openDashboard(page) {
     })
   ).toBeVisible()
 
-  return response.json()
+  return dashboard
 }
 
 function statValue(page, label) {
